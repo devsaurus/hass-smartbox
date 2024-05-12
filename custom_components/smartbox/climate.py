@@ -11,7 +11,7 @@ from homeassistant.components.climate.const import (
 from homeassistant.const import (
     ATTR_LOCKED,
     ATTR_TEMPERATURE,
-    TEMP_CELSIUS,
+    UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
 import logging
@@ -75,10 +75,18 @@ class SmartboxHeater(ClimateEntity):
         self._node = node
         self._status: Dict[str, Any] = {}
         self._available = False  # unavailable until we get an update
+        self._enable_turn_on_off_backwards_compatibility = False
         self._supported_features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE | ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
         )
         _LOGGER.debug(f"Created node {self.name} unique_id={self.unique_id}")
+
+    async def async_turn_off(self) -> None:
+        await self.async_set_hvac_mode(HVACMode.OFF)
+
+    async def async_turn_on(self) -> None:
+        await self.async_set_hvac_mode(HVACMode.AUTO)
+
 
     @property
     def unique_id(self) -> str:
@@ -108,7 +116,7 @@ class SmartboxHeater(ClimateEntity):
             return unit
         else:
             return (
-                TEMP_CELSIUS  # climate sensors need a temperature unit on construction
+                UnitOfTemperature.CELSIUS  # climate sensors need a temperature unit on construction
             )
 
     @property
