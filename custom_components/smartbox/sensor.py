@@ -1,14 +1,18 @@
+from datetime import datetime, timedelta
 from homeassistant.const import (
     ATTR_LOCKED,
     DEVICE_CLASS_BATTERY,
-    DEVICE_CLASS_TEMPERATURE,
+    DEVICE_CLASS_ENERGY,
     DEVICE_CLASS_POWER,
+    DEVICE_CLASS_POWER_FACTOR,
+    DEVICE_CLASS_TEMPERATURE,
+    ENERGY_WATT_HOUR,
     PERCENTAGE,
     POWER_WATT,
 )
 from homeassistant.components.sensor import (
     SensorEntity,
-    STATE_CLASS_MEASUREMENT,
+    SensorStateClass,
 )
 from homeassistant.core import HomeAssistant
 import logging
@@ -18,6 +22,7 @@ from unittest.mock import MagicMock
 from .const import (
     DOMAIN,
     HEATER_NODE_TYPE_ACM,
+    HEATER_NODE_TYPE_HTR,
     HEATER_NODE_TYPE_HTR_MOD,
     SMARTBOX_NODES,
 )
@@ -55,6 +60,25 @@ async def async_setup_platform(
         ],
         True,
     )
+    # Duty Cycle and Energy
+    # Only nodes of type 'htr' seem to report the duty cycle, which is needed
+    # to compute energy consumption
+    async_add_entities(
+        [
+            DutyCycleSensor(node)
+            for node in hass.data[DOMAIN][SMARTBOX_NODES]
+            if node.node_type == HEATER_NODE_TYPE_HTR
+        ],
+        True,
+    )
+    async_add_entities(
+        [
+            EnergySensor(node)
+            for node in hass.data[DOMAIN][SMARTBOX_NODES]
+            if node.node_type == HEATER_NODE_TYPE_HTR
+        ],
+        True,
+    )
     # Charge Level
     async_add_entities(
         [
@@ -73,6 +97,8 @@ class SmartboxSensorBase(SensorEntity):
         self._node = node
         self._status: Dict[str, Any] = {}
         self._available = False  # unavailable until we get an update
+        self._last_update: Optional[datetime] = None
+        self._time_since_last_update: Optional[timedelta] = None
         _LOGGER.debug(f"Created node {self.name} unique_id={self.unique_id}")
 
     @property
@@ -91,15 +117,25 @@ class SmartboxSensorBase(SensorEntity):
             # update our status
             self._status = new_status
             self._available = True
+            update_time = datetime.now()
+            if self._last_update is not None:
+                self._time_since_last_update = update_time - self._last_update
+            self._last_update = update_time
         else:
             self._available = False
+            self._last_update = None
+            self._time_since_last_update = None
+
+    @property
+    def time_since_last_update(self) -> Optional[timedelta]:
+        return self._time_since_last_update
 
 
 class TemperatureSensor(SmartboxSensorBase):
     """Smartbox heater temperature sensor"""
 
     device_class = DEVICE_CLASS_TEMPERATURE
-    state_class = STATE_CLASS_MEASUREMENT
+    state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
         super().__init__(node)
@@ -122,11 +158,18 @@ class TemperatureSensor(SmartboxSensorBase):
 
 
 class PowerSensor(SmartboxSensorBase):
-    """Smartbox heater power sensor"""
+    """Smartbox heater power sensor
+
+    Note: this represents the power the heater is drawing *when heating*; the
+    heater is not always active over the entire period since the last update,
+    even when 'active' is true. The duty cycle sensor indicates how much it
+    was active. To measure energy consumption, use the corresponding energy
+    sensor.
+    """
 
     device_class = DEVICE_CLASS_POWER
     native_unit_of_measurement = POWER_WATT
-    state_class = STATE_CLASS_MEASUREMENT
+    state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
         super().__init__(node)
@@ -141,9 +184,6 @@ class PowerSensor(SmartboxSensorBase):
 
     @property
     def native_value(self) -> float:
-        # TODO: is this correct? The heater seems to report power usage all the
-        # time otherwise, which doesn't make sense and doesn't tally with the
-        # graphs in the vendor app UI
         return (
             self._status["power"]
             if is_heating(self._node.node_type, self._status)
@@ -151,12 +191,75 @@ class PowerSensor(SmartboxSensorBase):
         )
 
 
+class DutyCycleSensor(SmartboxSensorBase):
+    """Smartbox heater duty cycle sensor
+
+    Represents the duty cycle for the heater.
+    """
+
+    device_class = DEVICE_CLASS_POWER_FACTOR
+    native_unit_of_measurement = PERCENTAGE
+    state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
+        super().__init__(node)
+
+    @property
+    def name(self) -> str:
+        return f"{self._node.name} Duty Cycle"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._node.node_id}_duty_cycle"
+
+    @property
+    def native_value(self) -> float:
+        return self._status["duty"]
+
+
+class EnergySensor(SmartboxSensorBase):
+    """Smartbox heater energy sensor
+
+    Represents the energy consumed by the heater.
+    """
+
+    device_class = DEVICE_CLASS_ENERGY
+    native_unit_of_measurement = ENERGY_WATT_HOUR
+    state_class = SensorStateClass.TOTAL
+
+    def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
+        super().__init__(node)
+
+    @property
+    def name(self) -> str:
+        return f"{self._node.name} Energy"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._node.node_id}_energy"
+
+    @property
+    def native_value(self) -> float | None:
+        time_since_last_update = self.time_since_last_update
+        if time_since_last_update is not None:
+            return (
+                float(self._status["power"])
+                * float(self._status["duty"])
+                / 100
+                * time_since_last_update.seconds
+                / 60
+                / 60
+            )
+        else:
+            return None
+
+
 class ChargeLevelSensor(SmartboxSensorBase):
     """Smartbox storage heater charge level sensor"""
 
     device_class = DEVICE_CLASS_BATTERY
     native_unit_of_measurement = PERCENTAGE
-    state_class = STATE_CLASS_MEASUREMENT
+    state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
         super().__init__(node)

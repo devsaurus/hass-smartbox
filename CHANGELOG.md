@@ -1,3 +1,3 @@
 # Changelog
 
-See GitHub release notes: https://github.com/graham33/hass-smartbox/releases
+See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
