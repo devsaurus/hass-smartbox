@@ -1,18 +1,14 @@
 from datetime import datetime, timedelta
 from homeassistant.const import (
     ATTR_LOCKED,
-    DEVICE_CLASS_BATTERY,
-    DEVICE_CLASS_ENERGY,
-    DEVICE_CLASS_POWER,
-    DEVICE_CLASS_POWER_FACTOR,
-    DEVICE_CLASS_TEMPERATURE,
-    ENERGY_WATT_HOUR,
+    UnitOfEnergy,
     PERCENTAGE,
-    POWER_WATT,
+    UnitOfPower,
 )
 from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
+    SensorDeviceClass,
 )
 from homeassistant.core import HomeAssistant
 import logging
@@ -134,7 +130,7 @@ class SmartboxSensorBase(SensorEntity):
 class TemperatureSensor(SmartboxSensorBase):
     """Smartbox heater temperature sensor"""
 
-    device_class = DEVICE_CLASS_TEMPERATURE
+    device_class = SensorDeviceClass.TEMPERATURE
     state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
@@ -167,8 +163,8 @@ class PowerSensor(SmartboxSensorBase):
     sensor.
     """
 
-    device_class = DEVICE_CLASS_POWER
-    native_unit_of_measurement = POWER_WATT
+    device_class = SensorDeviceClass.POWER
+    native_unit_of_measurement = UnitOfPower.WATT
     state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
@@ -197,7 +193,7 @@ class DutyCycleSensor(SmartboxSensorBase):
     Represents the duty cycle for the heater.
     """
 
-    device_class = DEVICE_CLASS_POWER_FACTOR
+    device_class = SensorDeviceClass.POWER_FACTOR
     native_unit_of_measurement = PERCENTAGE
     state_class = SensorStateClass.MEASUREMENT
 
@@ -223,8 +219,8 @@ class EnergySensor(SmartboxSensorBase):
     Represents the energy consumed by the heater.
     """
 
-    device_class = DEVICE_CLASS_ENERGY
-    native_unit_of_measurement = ENERGY_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    native_unit_of_measurement = UnitOfEnergy.WATT_HOUR
     state_class = SensorStateClass.TOTAL
 
     def __init__(self, node: Union[SmartboxNode, MagicMock]) -> None:
@@ -257,7 +253,7 @@ class EnergySensor(SmartboxSensorBase):
 class ChargeLevelSensor(SmartboxSensorBase):
     """Smartbox storage heater charge level sensor"""
 
-    device_class = DEVICE_CLASS_BATTERY
+    device_class = SensorDeviceClass.BATTERY
     native_unit_of_measurement = PERCENTAGE
     state_class = SensorStateClass.MEASUREMENT
 
@@ -275,3 +271,4 @@ class ChargeLevelSensor(SmartboxSensorBase):
     @property
     def native_value(self) -> int:
         return self._status["charge_level"]
+
