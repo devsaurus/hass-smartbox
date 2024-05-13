@@ -2,19 +2,21 @@ import asyncio
 import logging
 
 from homeassistant.const import (
-    TEMP_CELSIUS,
-    TEMP_FAHRENHEIT,
+    UnitOfTemperature,
+)
+
+from homeassistant.components.climate import (
+    HVACMode,
 )
 from homeassistant.components.climate.const import (
-    HVAC_MODE_AUTO,
-    HVAC_MODE_HEAT,
-    HVAC_MODE_OFF,
     PRESET_ACTIVITY,
     PRESET_AWAY,
     PRESET_COMFORT,
     PRESET_ECO,
     PRESET_HOME,
 )
+
+
 from homeassistant.core import HomeAssistant
 from smartbox import Session, UpdateManager
 from typing import Any, cast, Dict, List, Union
@@ -246,9 +248,9 @@ def get_temperature_unit(status):
         return None
     unit = status["units"]
     if unit == "C":
-        return TEMP_CELSIUS
+        return UnitOfTemperature.CELSIUS
     elif unit == "F":
-        return TEMP_FAHRENHEIT
+        return UnitOfTemperature.FAHRENHEIT
     else:
         raise ValueError(f"Unknown temp unit {unit}")
 
@@ -382,21 +384,21 @@ def set_temperature_args(
 def get_hvac_mode(node_type: str, status: Dict[str, Any]) -> str:
     _check_status_key("mode", node_type, status)
     if status["mode"] == "off":
-        return HVAC_MODE_OFF
+        return HVACMode.OFF
     elif node_type == HEATER_NODE_TYPE_HTR_MOD and not status["on"]:
-        return HVAC_MODE_OFF
+        return HVACMode.OFF
     elif status["mode"] == "manual":
-        return HVAC_MODE_HEAT
+        return HVACMode.HEAT
     elif status["mode"] == "auto":
-        return HVAC_MODE_AUTO
+        return HVACMode.AUTO
     elif status["mode"] == "modified_auto":
         # This occurs when the temperature is modified while in auto mode.
         # Mapping it to auto seems to make this most sense
-        return HVAC_MODE_AUTO
+        return HVACMode.AUTO
     elif status["mode"] == "self_learn":
-        return HVAC_MODE_AUTO
+        return HVACMode.AUTO
     elif status["mode"] == "presence":
-        return HVAC_MODE_AUTO
+        return HVACMode.AUTO
     else:
         _LOGGER.error(f"Unknown smartbox node mode {status['mode']}")
         raise ValueError(f"Unknown smartbox node mode {status['mode']}")
@@ -406,9 +408,9 @@ def set_hvac_mode_args(
     node_type: str, status: Dict[str, Any], hvac_mode: str
 ) -> Dict[str, Any]:
     if node_type == HEATER_NODE_TYPE_HTR_MOD:
-        if hvac_mode == HVAC_MODE_OFF:
+        if hvac_mode == HVACMode.OFF:
             return {"on": False}
-        elif hvac_mode == HVAC_MODE_HEAT:
+        elif hvac_mode == HVACMode.HEAT:
             # We need to pass these status keys on when setting the mode
             required_status_keys = ["selected_temp"]
             for key in required_status_keys:
@@ -417,16 +419,16 @@ def set_hvac_mode_args(
             hvac_mode_args["on"] = True
             hvac_mode_args["mode"] = "manual"
             return hvac_mode_args
-        elif hvac_mode == HVAC_MODE_AUTO:
+        elif hvac_mode == HVACMode.AUTO:
             return {"on": True, "mode": "auto"}
         else:
             raise ValueError(f"Unsupported hvac mode {hvac_mode}")
     else:
-        if hvac_mode == HVAC_MODE_OFF:
+        if hvac_mode == HVACMode.OFF:
             return {"mode": "off"}
-        elif hvac_mode == HVAC_MODE_HEAT:
+        elif hvac_mode == HVACMode.HEAT:
             return {"mode": "manual"}
-        elif hvac_mode == HVAC_MODE_AUTO:
+        elif hvac_mode == HVACMode.AUTO:
             return {"mode": "auto"}
         else:
             raise ValueError(f"Unsupported hvac mode {hvac_mode}")
@@ -492,7 +494,7 @@ def set_preset_mode_status_update(
     assert preset_mode != PRESET_HOME and preset_mode != PRESET_AWAY
 
     if preset_mode == PRESET_SCHEDULE:
-        return set_hvac_mode_args(node_type, status, HVAC_MODE_AUTO)
+        return set_hvac_mode_args(node_type, status, HVACMode.AUTO)
     elif preset_mode == PRESET_SELF_LEARN:
         return {"on": True, "mode": "self_learn"}
     elif preset_mode == PRESET_ACTIVITY:

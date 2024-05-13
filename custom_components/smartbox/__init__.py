@@ -6,6 +6,7 @@ import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.discovery import async_load_platform
 
 from smartbox import __version__ as SMARTBOX_VERSION
 
@@ -133,9 +134,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     if hass.data[DOMAIN][SMARTBOX_DEVICES]:
         for component in PLATFORMS:
-            await hass.helpers.discovery.async_load_platform(
-                component, DOMAIN, {}, config
-            )
+            await async_load_platform(hass, component, DOMAIN, {}, config)
 
     _LOGGER.debug("Finished setting up Smartbox integration")
 
