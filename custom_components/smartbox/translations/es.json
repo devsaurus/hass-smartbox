@@ -1,0 +1,83 @@
+{
+  "title": "smartbox",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Añadir una cuenta",
+        "data": {
+          "api_name": "Nombre de la API",
+          "username": "Nombre de usuario",
+          "password": "Contraseña",
+          "basic_auth_creds": "Credenciales de Autenticación Básica"
+        },
+        "data_description": {
+          "api_name": "El nombre de la API de tu proveedor de calefacción. Esto es visible en la entrada 'Host API' en el menú 'Versión' de la aplicación móvil o web. Si el nombre del host tiene el formato api-foo.xxxx o api.xxxx, usa los valores api-foo o api respectivamente.",
+          "basic_auth_creds": "Estas son credenciales de autenticación básica HTTP usadas para realizar la autenticación inicial con el servidor. Usa la cadena codificada en base64 directamente."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reautenticación",
+        "description": "La integración de Smartbox necesita volver a autenticar tu cuenta",
+        "data": {
+          "username": "Nombre de usuario",
+          "password": "Contraseña"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se puede conectar: {error}",
+      "invalid_auth": "Autenticación inválida: {error}",
+      "unknown": "Error desconocido: {error}"
+    },
+    "abort": {
+      "unknown": "Error desconocido: {error}.",
+      "already_configured": "Esta cuenta ya está configurada.",
+      "reauth_successful": "Reautenticación exitosa."
+    }
+  },
+  "options": {
+    "step": {
+      "session_options": {
+        "title": "Opciones de sesión",
+        "data": {
+          "session_retry_attempts": "Intentos de reintento de sesión",
+          "session_backoff_factor": "Factor de retardo de sesión",
+          "socket_reconnect_attempts": "Intentos de reconexión del socket",
+          "socket_backoff_factor": "Factor de retardo del socket"
+        },
+        "data_description": {
+          "session_retry_attempts": "Cuántas veces reintentar las operaciones REST de la sesión",
+          "session_backoff_factor": "Cuánto tiempo de espera entre reintentos REST",
+          "socket_reconnect_attempts": "Cuántas veces intentar reconectar el socket.io",
+          "socket_backoff_factor": "Cuánto tiempo de espera entre los intentos iniciales de conexión del socket"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "charge_level": {
+        "name": "Nivel de carga"
+      },
+      "duty_cycle": {
+        "name": "Ciclo de trabajo"
+      }
+    },
+    "number": {
+      "power_limit": {
+        "name": "Límite de potencia"
+      }
+    },
+    "switch": {
+      "true_radiant": {
+        "name": "True Radiant"
+      },
+      "window_mode": {
+        "name": "Modo ventana"
+      },
+      "away_status": {
+        "name": "Estado de ausencia"
+      }
+    }
+  }
+}
