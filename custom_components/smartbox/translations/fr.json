@@ -5,13 +5,12 @@
       "user": {
         "title": "Ajouter un compte",
         "data": {
-          "api_name": "Nom de l'API",
+          "api_name": "Nom de votre fournisseur",
           "username": "Nom d'utilisateur",
           "password": "Mot de passe",
           "basic_auth_creds": "Entête d'authentification"
         },
         "data_description": {
-          "api_name": "Le nom API de votre fournisseur de chauffage.",
           "basic_auth_creds": "Il s'agit d'un entête HTTP Basic Auth utilisé pour effectuer l'authentification initiale auprès du serveur."
         }
       },
@@ -25,7 +24,7 @@
       }
     },
     "error": {
-      "cannot_connect": "Impossible de se connecter {error}",
+      "cannot_connect": "Impossible de se connecter à l'API {error}",
       "invalid_auth": "Authentification invalide {error}",
       "unknown": "Erreur inconnue {error}"
     },
@@ -37,15 +36,18 @@
   },
   "options": {
     "step": {
-      "session_options": {
-        "title": "Options de session",
+      "options": {
+        "title": "Options",
         "data": {
+          "history_consumption": "Historique de consommation",
+          "resailer_entity": "Logo du revendeur pour les entités",
           "session_retry_attempts": "Nombre de tentatives d'opérations REST",
           "session_backoff_factor": "Intervalle entre chaque tentatives REST",
           "socket_reconnect_attempts": "Nombre de tentative de connexion aux sockets",
           "socket_backoff_factor": "Intervalle entre chaque tentative sockets"
         },
         "data_description": {
+          "history_consumption": "Mode de récupération de l'historique de consommation. Auto: force les données. Start: initialisation. Off: aucune récupération des données (attention, certaines valeurs peuvent être abérantes).",
           "session_retry_attempts": "Nombre de tentatives d'opérations REST.",
           "session_backoff_factor": "Intervalle entre chaque tentatives REST",
           "socket_reconnect_attempts": "Nombre de tentative de connexion aux sockets",
@@ -58,6 +60,12 @@
     "sensor": {
       "charge_level": {
         "name": "Niveau de charge"
+      },
+      "hourly_consumption": {
+        "name": "Consommation horaire"
+      },
+      "total_consumption": {
+        "name": "Consommation total"
       },
       "duty_cycle": {
         "name": "Cycle de service"

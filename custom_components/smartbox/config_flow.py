@@ -4,7 +4,6 @@ import logging
 from typing import Any
 
 import homeassistant.helpers.config_validation as cv
-import requests
 import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -15,15 +14,27 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
 )
+from smartbox import AvailableResailers
 
-from . import InvalidAuth, create_smartbox_session_from_entry
+from . import (
+    APIUnavailableError,
+    InvalidAuthError,
+    SmartboxError,
+    create_smartbox_session_from_entry,
+)
 from .const import (
     CONF_API_NAME,
-    CONF_BASIC_AUTH_CREDS,
+    CONF_DISPLAY_ENTITY_PICTURES,
+    CONF_HISTORY_CONSUMPTION,
     CONF_PASSWORD,
     CONF_SESSION_BACKOFF_FACTOR,
     CONF_SESSION_RETRY_ATTEMPTS,
@@ -33,6 +44,7 @@ from .const import (
     DEFAULT_SESSION_RETRY_ATTEMPTS,
     DEFAULT_SOCKET_BACKOFF_FACTOR,
     DOMAIN,
+    HistoryConsumptionStatus,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,7 +60,14 @@ LOGIN_DATA_SCHEMA = {
     ),
 }
 
-SESSION_DATA_SCHEMA = {
+OPTIONS_DATA_SCHEMA = {
+    vol.Required(CONF_HISTORY_CONSUMPTION): SelectSelector(
+        SelectSelectorConfig(
+            options=[e.value for e in HistoryConsumptionStatus],
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    ),
+    vol.Required(CONF_DISPLAY_ENTITY_PICTURES, default=False): BooleanSelector(),
     vol.Required(
         CONF_SESSION_RETRY_ATTEMPTS,
         default=DEFAULT_SESSION_RETRY_ATTEMPTS,
@@ -61,13 +80,19 @@ SESSION_DATA_SCHEMA = {
     vol.Required(CONF_SOCKET_BACKOFF_FACTOR, default=0.1): cv.small_float,
 }
 
+
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_API_NAME): str,
-        **LOGIN_DATA_SCHEMA,
-        vol.Required(CONF_BASIC_AUTH_CREDS): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        vol.Required(CONF_API_NAME): SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=resailer.api_url, label=resailer.name)
+                    for resailer in AvailableResailers.resailers.values()
+                ],
+                mode=SelectSelectorMode.DROPDOWN,
+            )
         ),
+        **LOGIN_DATA_SCHEMA,
     },
 )
 
@@ -86,22 +111,27 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 await create_smartbox_session_from_entry(self.hass, user_input)
-            except requests.exceptions.ConnectionError as ex:
+            except APIUnavailableError as ex:
                 errors["base"] = "cannot_connect"
                 placeholders["error"] = str(ex)
-            except InvalidAuth as ex:
+            except InvalidAuthError as ex:
                 errors["base"] = "invalid_auth"
                 placeholders["error"] = str(ex)
-            except Exception as ex:
+            except SmartboxError as ex:
                 errors["base"] = "unknown"
-                placeholders["base"] = str(ex)
+                placeholders["error"] = str(ex)
             else:
-                await self.async_set_unique_id(user_input[CONF_USERNAME])
+                await self.async_set_unique_id(
+                    f"{AvailableResailers(api_url=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
+                )
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title=user_input[CONF_USERNAME], data=user_input
+                    title=f"{AvailableResailers(api_url=user_input[CONF_API_NAME]).name} {user_input[CONF_USERNAME]}",
+                    data=user_input,
                 )
-        self.context["title_placeholders"] = placeholders
+        context = dict(self.context)
+        context["title_placeholders"] = placeholders
+        self.context = context
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
@@ -125,11 +155,19 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
             user_input = {**self.current_user_inputs, **user_input}
             try:
                 await create_smartbox_session_from_entry(self.hass, user_input)
-            except Exception as ex:
+            except APIUnavailableError as ex:
+                errors["base"] = "cannot_connect"
+                placeholders["error"] = str(ex)
+            except InvalidAuthError as ex:
                 errors["base"] = "invalid_auth"
                 placeholders["error"] = str(ex)
+            except SmartboxError as ex:
+                errors["base"] = "unknown"
+                placeholders["error"] = str(ex)
             else:
-                await self.async_set_unique_id(user_input[CONF_USERNAME])
+                await self.async_set_unique_id(
+                    f"{AvailableResailers(api_url=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
+                )
                 self._abort_if_unique_id_mismatch(reason="invalid_auth")
                 return self.async_update_reload_and_abort(
                     self._get_reauth_entry(),
@@ -156,14 +194,14 @@ class OptionsFlowHandler(OptionsFlow):
     """Options flow."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initilisation of class."""
-        self.config_entry = config_entry
+        """Initialisation of class."""
+        self.config_entry_options = config_entry.options
 
     async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
         """Manage the Netatmo options."""
-        return await self.async_step_session_options()
+        return await self.async_step_options()
 
-    async def async_step_session_options(
+    async def async_step_options(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
@@ -171,8 +209,8 @@ class OptionsFlowHandler(OptionsFlow):
             return self.async_create_entry(title=None, data=user_input)
 
         return self.async_show_form(
-            step_id="session_options",
+            step_id="options",
             data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(SESSION_DATA_SCHEMA), self.config_entry.options
+                vol.Schema(OPTIONS_DATA_SCHEMA), self.config_entry_options
             ),
         )

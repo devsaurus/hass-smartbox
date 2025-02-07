@@ -1,46 +1,56 @@
 # hass-smartbox
-![hassfest](https://github.com/ajtudela/hass-smartbox/workflows/Validate%20with%20hassfest/badge.svg) [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration) [![codecov](https://codecov.io/gh/ajtudela/hass-smartbox/branch/main/graph/badge.svg?token=C6J448TUQ8)](https://codecov.io/gh/ajtudela/hass-smartbox)
+![hassfest](https://github.com/ajtudela/hass-smartbox/workflows/Validate%20with%20hassfest/badge.svg) [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration) [![codecov](https://codecov.io/gh/ajtudela/hass-smartbox/branch/main/graph/badge.svg?token=C6J448TUQ8)](https://codecov.io/gh/ajtudela/hass-smartbox) [![Total downloads](https://img.shields.io/github/downloads/ajtudela/hass-smartbox/total)](https://github.com/ajtudela/hass-smartbox/releases) [![Downloads of latest version (latest by SemVer)](https://img.shields.io/github/downloads/ajtudela/hass-smartbox/latest/total?sort=semver)](https://github.com/ajtudela/hass-smartbox/releases/latest) [![Current version](https://img.shields.io/github/v/release/ajtudela/hass-smartbox)](https://github.com/ajtudela/hass-smartbox/releases/latest)
+
 
 Home Assistant integration for Haverland (and other brands) heating smartboxes.
 
-**NOTE**: The initial version of this integration was made by [graham33](https://github.com/graham33) but it was not maintained. I have taken over the project and will try to keep it up to date.
 
 ## Installation
-This integration uses the [smartbox] Python module, so make sure to install that
-into your Home Assistant python environment first. If you are using hass.io, the
-module should be automatically installed from github via the reference in the
-`manifest.json` file.
 
-Then, install the `custom_components/smartbox` directory in this repo to your
-Home Assistant `custom_components` directory. See the [Home Assistant
-integration docs] for details.
+### Using HACS (Recommended)
 
-### HACS
-Initial support is available for installation via HACS, as a [custom
-repository].
+1. Add this repository to your custom repositories
+1. Search for and install "Smartbox" in HACS.
+1. Restart Home Assistant.
+1. In the Home Assistant UI go to "Configuration" -> "Integrations" click "+" and search for "Smartbox"
+
+### Manually Copy Files
+
+1. Using the tool of choice open the directory (folder) for your HA configuration (where you find `configuration.yaml`).
+1. If you do not have a `custom_components` directory (folder) there, you need to create it.
+1. In the `custom_components` directory (folder) create a new folder called `smartbox`.
+1. Download _all_ the files from the `custom_components/smartbox/` directory (folder) in this repository.
+1. Place the files you downloaded in the new directory (folder) you created.
+1. Restart Home Assistant
+1. In the Home Assistant UI go to "Configuration" -> "Integrations" click "+" and search for "Smartbox"
+
+### Finally
+
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smartbox)
+
 
 ## Configuration
 
 You will need the following items of information:
-* The API name for your heater vendor. This is visible in the 'API Host' entry
-  in the 'Version' menu item in the mobile app/web app. If the host name is of
-  the form `api-foo.xxxx` or `api.xxxx` use the values `api-foo` or `api`
-  respectively.
+* Name of your resailer
 * Your username and password used for the mobile app/web app.
-* Basic auth credentials: this is an HTTP Basic Auth credential used to do
-  initial authentication with the server. Use the base64 encoded string
-  directly. See 'Basic Auth Credential' section below for more details.
 
-### Basic Auth Credential
-Initial authentication to the smartbox REST API is protected by HTTP Basic Auth,
-in addition to the user's username and password which are then used to obtain an
-access token. In order not to undermine the security layer it provides, and also
-because it might change over time or vary between implementations, **the token
-is not provided here and system owners need to find it themselves**.
+If there is an issue during the process or authentication, the errors will be displayed.
 
 ### Additional Options
 You can also specify the following options (although they have reasonable defaults):
 
+#### Consumption history options
+We are currently getting the [consumption](#consumption) of device throuw the API and we inject it in statistics and TotalConsumption sensor
+* start : we will get the last 3 years of consumption and set the option to auto.
+* auto : every hour, we get the last 24 hours.
+* off : stop the automatic collect. We will still update the sensor every hour.
+
+#### Resailer logo
+By default, each sensor has in own icon depends on the type of the sensor.
+You can activate this option to display the logo of the resailer instead.
+
+#### Session options 
 ```
   session_retry_attempts: 8 # how many times to retry session REST operations
   session_backoff_factor: 0.1 # how much to backoff between REST retries
@@ -48,32 +58,9 @@ You can also specify the following options (although they have reasonable defaul
   socket_backoff_factor: 0.1 # how much to backoff between initial socket connect attempts
 ```
 
-### Use in energy dashboard
+## Features
 
-To use the values in the Energy dashboard of Home Assistant, you have to
-aggregate the power sensors into energy sensors via an integration
-(https://www.home-assistant.io/integrations/integration/#energy)
-
-*WARNING*: currently the power sensors created by this component seem to
-misreport power usage quite significantly. This is because they record power
-used when the status of the device is 'active', but status updates are very
-infrequent and so this won't be accurate.
-
-```
-sensor:
-  - platform: integration
-    source: sensor.living_room.energy
-    name: energy_living_room
-    unit_prefix: k
-    round: 2
-    method: left
-```
-
-The resulting sensor 'sensor.energy_living_room' can then be added to the Energy dashboard as soon as it has values.
-
-## Supported Node types
-
-### Heaters
+### Heaters Supported Node types
 These are modelled as Home Assistant Climate entities.
 
 * `htr` and `acm` (accumulator) nodes
@@ -94,6 +81,28 @@ The modes and presets for htr_mod heaters are mapped as follows:
 | self\_learn   | *                      | AUTO         | SELF\_LEARN |
 | presence      | *                      | AUTO         | ACTIVITY    |
 
+### Consumption
+The smartbox API is only giving the hourly consumption from a start and an end period of time.
+You can't have real time consumption of a device and this consumption is always increasing.
+
+At every beginning of an hour, during around 15/20 minutes, the API do not provide data for the current hour.
+So we always get a period of two hour to have at least some data, and get the most recent one to not have drop of consumption.
+
+Every hour, we are updating data sensor with the most recent data. You are able to see the consumption directly into the history graph of the sensor.
+
+But to be sure we ensure the right data to the right hour, we also get the last 24 hours and upsert these data into statistics to avoid time difference and some data drop.
+> [!TIP]
+> If you don't want to upsert these 24 hours, you have to set the [option](#consumption-history-options) to `off`.
+
+#### History
+The first time we create a config entry (or when the [option](#consumption-history-options) of the config entry is set to `start`) we get the last 3 years of consumption.
+As it is not possible to add it directly to the sensor data, we insert it into the statistics of the sensor.
+So it let the energy dashboard working with the current and back history.
+
+
+> [!TIP]
+> If you want to reset all the data, you have to set the [option](#consumption-history-options) to `start`.
+
 ## Debugging
 
 Debug logging can be enabled by increasing the log level for the smartbox custom
@@ -109,16 +118,20 @@ component and the underlying [smartbox] python module in the Home Assistant
    ...
 ```
 
-**Warning: currently logs might include credentials, so please be careful when
-sharing excerpts from logs**
+> [!WARNING]
+> Currently logs might include credentials, so please be careful when
+sharing excerpts from logs
 
 See the [Home Assistant logger docs] for how to view the actual logs. Please
 file a [Github issue] with any problems.
 
 ## TODO
-* config_flow (only configured via yaml atm)
-* Handle adding and removing entities properly
 * Graceful cleanup/shutdown of update task
+* use a coordinator to update data (and use the websocket to propagate data)
+
+
+> [!NOTE]
+> The initial version of this integration was made by [graham33](https://github.com/graham33) but it was not maintained.
 
 [custom repository]: https://hacs.xyz/docs/faq/custom_repositories
 [Github issue]: https://github.com/ajtudela/hass-smartbox/issues

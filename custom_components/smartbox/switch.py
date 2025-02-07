@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -25,17 +26,17 @@ async def async_setup_entry(
     switch_entities: list[SwitchEntity] = []
     for device in hass.data[DOMAIN][SMARTBOX_DEVICES]:
         _LOGGER.debug("Creating away switch for device %s", device.name)
-        switch_entities.append(AwaySwitch(device))
+        switch_entities.append(AwaySwitch(device, entry))
 
     for node in hass.data[DOMAIN][SMARTBOX_NODES]:
         if window_mode_available(node):
             _LOGGER.debug("Creating window_mode switch for node %s", node.name)
-            switch_entities.append(WindowModeSwitch(node))
+            switch_entities.append(WindowModeSwitch(node, entry))
         else:
             _LOGGER.info("Window mode not available for node %s", node.name)
         if true_radiant_available(node):
             _LOGGER.debug("Creating true_radiant switch for node %s", node.name)
-            switch_entities.append(TrueRadiantSwitch(node))
+            switch_entities.append(TrueRadiantSwitch(node, entry))
         else:
             _LOGGER.info("True radiant not available for node %s", node.name)
 
@@ -49,13 +50,13 @@ class AwaySwitch(SmartBoxDeviceEntity, SwitchEntity):
 
     _attr_key = "away_status"
 
-    def turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
         """Turn on the switch."""
-        return self._device.set_away_status(True)
+        return await self._device.set_away_status(True)
 
-    def turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
         """Turn off the switch."""
-        return self._device.set_away_status(False)
+        return await self._device.set_away_status(False)
 
     @property
     def is_on(self):
@@ -67,14 +68,15 @@ class WindowModeSwitch(SmartBoxNodeEntity, SwitchEntity):
     """Smartbox node window mode switch."""
 
     _attr_key = "window_mode"
+    _attr_entity_category = EntityCategory.CONFIG
 
-    def turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
         """Turn on the switch."""
-        return self._node.set_window_mode(True)
+        return await self._node.set_window_mode(True)
 
-    def turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
         """Turn off the switch."""
-        return self._node.set_window_mode(False)
+        return await self._node.set_window_mode(False)
 
     @property
     def is_on(self):
@@ -86,14 +88,15 @@ class TrueRadiantSwitch(SmartBoxNodeEntity, SwitchEntity):
     """Smartbox node true radiant switch."""
 
     _attr_key = "true_radiant"
+    _attr_entity_category = EntityCategory.CONFIG
 
-    def turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
         """Turn on the switch."""
-        return self._node.set_true_radiant(True)
+        return await self._node.set_true_radiant(True)
 
-    def turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
         """Turn off the switch."""
-        return self._node.set_true_radiant(False)
+        return await self._node.set_true_radiant(False)
 
     @property
     def is_on(self):

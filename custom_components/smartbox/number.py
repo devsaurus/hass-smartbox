@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -21,7 +22,7 @@ async def async_setup_entry(
     _LOGGER.debug("Setting up Smartbox number platform")
 
     async_add_entities(
-        [PowerLimit(device) for device in hass.data[DOMAIN][SMARTBOX_DEVICES]],
+        [PowerLimit(device, entry) for device in hass.data[DOMAIN][SMARTBOX_DEVICES]],
         True,
     )
     _LOGGER.debug("Finished setting up Smartbox number platform")
@@ -32,12 +33,14 @@ class PowerLimit(SmartBoxDeviceEntity, NumberEntity):
 
     _attr_key = "power_limit"
     native_max_value: float = _MAX_POWER_LIMIT
+    _attr_entity_category = EntityCategory.CONFIG
+    native_unit_of_measurement = UnitOfPower.WATT
 
     @property
     def native_value(self) -> float:
         """Return the native value of the number."""
         return self._device.power_limit
 
-    def set_native_value(self, value: float) -> None:
+    async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
-        self._device.set_power_limit(int(value))
+        await self._device.set_power_limit(int(value))

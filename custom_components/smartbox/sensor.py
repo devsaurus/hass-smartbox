@@ -1,10 +1,20 @@
 """Support for Smartbox sensor entities."""
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
+from dateutil import tz
+from homeassistant.components.recorder import DOMAIN as RECORDER_DOMAIN
+from homeassistant.components.recorder.models.statistics import (
+    StatisticData,
+    StatisticMetaData,
+)
+from homeassistant.components.recorder.statistics import (
+    async_import_statistics,
+)
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -20,13 +30,14 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
+    CONF_HISTORY_CONSUMPTION,
     DOMAIN,
-    HEATER_NODE_TYPE_ACM,
-    HEATER_NODE_TYPE_HTR,
-    HEATER_NODE_TYPE_HTR_MOD,
+    SmartboxNodeType,
     SMARTBOX_NODES,
+    HistoryConsumptionStatus,
 )
 from .entity import SmartBoxNodeEntity
 from .model import SmartboxNode, get_temperature_unit, is_heater_node
@@ -39,11 +50,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up platform."""
     _LOGGER.debug("Setting up Smartbox sensor platform")
-
     # Temperature
     async_add_entities(
         [
-            TemperatureSensor(node)
+            TemperatureSensor(node, entry)
             for node in hass.data[DOMAIN][SMARTBOX_NODES]
             if is_heater_node(node)
         ],
@@ -52,9 +62,9 @@ async def async_setup_entry(
     # Power
     async_add_entities(
         [
-            PowerSensor(node)
+            PowerSensor(node, entry)
             for node in hass.data[DOMAIN][SMARTBOX_NODES]
-            if is_heater_node(node) and node.node_type != HEATER_NODE_TYPE_HTR_MOD
+            if is_heater_node(node) and node.node_type != SmartboxNodeType.HTR_MOD
         ],
         True,
     )
@@ -63,26 +73,35 @@ async def async_setup_entry(
     # to compute energy consumption
     async_add_entities(
         [
-            DutyCycleSensor(node)
+            DutyCycleSensor(node, entry)
             for node in hass.data[DOMAIN][SMARTBOX_NODES]
-            if node.node_type == HEATER_NODE_TYPE_HTR
+            if node.node_type == SmartboxNodeType.HTR
         ],
         True,
     )
     async_add_entities(
         [
-            EnergySensor(node)
+            EnergySensor(node, entry)
             for node in hass.data[DOMAIN][SMARTBOX_NODES]
-            if node.node_type == HEATER_NODE_TYPE_HTR
+            if node.node_type == SmartboxNodeType.HTR
         ],
         True,
     )
+    async_add_entities(
+        [
+            TotalConsumptionSensor(node, entry)
+            for node in hass.data[DOMAIN][SMARTBOX_NODES]
+            if node.node_type == SmartboxNodeType.HTR
+        ],
+        True,
+    )
+
     # Charge Level
     async_add_entities(
         [
-            ChargeLevelSensor(node)
+            ChargeLevelSensor(node, entry)
             for node in hass.data[DOMAIN][SMARTBOX_NODES]
-            if is_heater_node(node) and node.node_type == HEATER_NODE_TYPE_ACM
+            if is_heater_node(node) and node.node_type == SmartboxNodeType.ACM
         ],
         True,
     )
@@ -93,12 +112,14 @@ async def async_setup_entry(
 class SmartboxSensorBase(SmartBoxNodeEntity, SensorEntity):
     """Base class for Smartbox sensor."""
 
-    def __init__(self, node: SmartboxNode | MagicMock) -> None:
+    def __init__(
+        self, node: SmartboxNode | MagicMock, entry: ConfigEntry, **kwargs: Any
+    ) -> None:
         """Initialize the Climate Entity."""
-        super().__init__(node=node)
+        super().__init__(node=node, entry=entry, **kwargs)
+        self.config_entry = entry
         self._status: dict[str, Any] = {}
         self._available = False  # unavailable until we get an update
-        self._samples: dict[str, Any] = {}
         self._last_update: datetime | None = None
         self._time_since_last_update: timedelta | None = None
         _LOGGER.debug("Created node unique_id=%s", self.unique_id)
@@ -213,6 +234,96 @@ class EnergySensor(SmartboxSensorBase):
                 / 60
             )
         return None
+
+
+class TotalConsumptionSensor(SmartboxSensorBase):
+    """Smartbox heater energy sensor: Represents the energy consumed by the heater in total."""
+
+    _attr_key = "total_consumption"
+    device_class = SensorDeviceClass.ENERGY
+    native_unit_of_measurement = UnitOfEnergy.WATT_HOUR
+    state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_value = None
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the native value of the sensor."""
+        return self._node.total_energy
+
+    async def async_update(self) -> None:
+        """Get the latest data."""
+        await super().async_update()
+        await self._node.update_samples()
+
+    async def async_added_to_hass(self) -> None:
+        """When added to hass."""
+        # perform initial statistics import when sensor is added, otherwise it would take
+        # 1 day when _handle_coordinator_update is triggered for the first time.
+        await self.update_statistics()
+        await super().async_added_to_hass()
+
+        async_track_time_interval(
+            self.hass,
+            self.update_statistics,
+            timedelta(hours=24),
+            name=f"Update statistics - {self.name}",
+            cancel_on_shutdown=True,
+        )
+
+    async def update_statistics(self, *args, **kwargs) -> None:
+        """Update statistics from samples."""
+        history_status = HistoryConsumptionStatus(
+            self.config_entry.options.get(
+                CONF_HISTORY_CONSUMPTION, HistoryConsumptionStatus.START
+            )
+        )
+        statistic_id = f"{self.entity_id}"
+        hourly_data = []
+        if history_status == HistoryConsumptionStatus.START:
+            # last 3 years
+            for year in (3, 2, 1):
+                year_sample = await self._node.get_samples(
+                    time.time() - (year * 365 * 24 * 60 * 60),
+                    time.time() - ((year - 1) * 365 * 24 * 60 * 60 - 3600),
+                )
+                hourly_data.extend(year_sample["samples"])
+            self.hass.config_entries.async_update_entry(
+                entry=self.config_entry,
+                options={
+                    **self.config_entry.options,
+                    CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+                },
+            )
+        elif history_status == HistoryConsumptionStatus.AUTO:
+            # last day
+            hourly_data = (
+                await self._node.get_samples(
+                    time.time() - (24 * 60 * 50),
+                    time.time() + 3600,
+                )
+            )["samples"]
+
+        hourly_data = sorted(hourly_data, key=lambda x: x["t"])
+        statistics: list[StatisticData] = [
+            StatisticData(
+                start=datetime.fromtimestamp(entry["t"], tz.tzlocal())
+                - timedelta(hours=1),
+                sum=entry["counter"],
+                state=entry["counter"],
+            )
+            for entry in hourly_data
+        ]
+        metadata: StatisticMetaData = StatisticMetaData(
+            has_mean=False,
+            has_sum=True,
+            source=RECORDER_DOMAIN,
+            name=statistic_id,
+            statistic_id=statistic_id,
+            unit_of_measurement=self.native_unit_of_measurement,
+        )
+        if statistics and history_status != HistoryConsumptionStatus.OFF:
+            _LOGGER.debug("Insert statistics: %s %s", metadata, statistics)
+            async_import_statistics(self.hass, metadata, statistics)
 
 
 class ChargeLevelSensor(SmartboxSensorBase):

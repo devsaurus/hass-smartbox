@@ -3,17 +3,16 @@
 import logging
 from typing import Any
 
-import requests
-from homeassistant import exceptions
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from smartbox import Session
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from smartbox import AsyncSmartboxSession
+from smartbox.error import APIUnavailableError, InvalidAuthError, SmartboxError
 
 from .const import (
     CONF_API_NAME,
-    CONF_BASIC_AUTH_CREDS,
     CONF_PASSWORD,
     CONF_USERNAME,
     DOMAIN,
@@ -34,33 +33,33 @@ PLATFORMS: list[Platform] = [
 ]
 
 
-class InvalidAuth(exceptions.HomeAssistantError):
-    """Error to indicate there is invalid auth."""
-
-
 async def create_smartbox_session_from_entry(
     hass: HomeAssistant, entry: ConfigEntry | dict[str, Any] | None = None
-) -> Session:
+) -> AsyncSmartboxSession:
     """Create a Session class from smartbox."""
     data = {}
-    if type(entry) is dict:
+    if isinstance(entry, dict):
         data = entry
-    else:
+    elif isinstance(entry, ConfigEntry):
         data = entry.data
     try:
-        session = await hass.async_add_executor_job(
-            Session,
-            data[CONF_API_NAME],
-            data[CONF_BASIC_AUTH_CREDS],
-            data[CONF_USERNAME],
-            data[CONF_PASSWORD],
+        websession = async_get_clientsession(hass)
+        session = AsyncSmartboxSession(
+            api_name=data[CONF_API_NAME],
+            username=data[CONF_USERNAME],
+            password=data[CONF_PASSWORD],
+            websession=websession,
         )
-        await hass.async_add_executor_job(session.get_access_token)
+        await session.health_check()
+        await session.check_refresh_auth()
+    except APIUnavailableError as ex:
+        raise APIUnavailableError(ex) from ex
+    except InvalidAuthError as ex:
+        raise InvalidAuthError(ex) from ex
+    except SmartboxError as ex:
+        raise SmartboxError(ex) from ex
+    else:
         return session
-    except requests.exceptions.ConnectionError as ex:
-        raise requests.exceptions.ConnectionError from ex
-    except InvalidAuth as ex:
-        raise InvalidAuth from ex
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -74,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][SMARTBOX_DEVICES] = []
     hass.data[DOMAIN][SMARTBOX_NODES] = []
 
-    devices = await get_devices(hass=hass, session=session)
+    devices = await get_devices(session=session)
     for device in devices:
         _LOGGER.info("Setting up configured device %s", device.dev_id)
         hass.data[DOMAIN][SMARTBOX_DEVICES].append(device)

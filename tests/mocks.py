@@ -1,19 +1,18 @@
 import logging
 from copy import deepcopy
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from homeassistant.components.climate.const import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.helpers import entity_registry
+from smartbox.resailer import SmartboxResailer
 
 from custom_components.smartbox.const import (
     DOMAIN,
-    HEATER_NODE_TYPE_ACM,
-    HEATER_NODE_TYPE_HTR,
-    HEATER_NODE_TYPE_HTR_MOD,
+    SmartboxNodeType,
 )
 from custom_components.smartbox.types import SetupDict, StatusDict
 from tests.const import CONF_DEVICE_IDS
@@ -21,16 +20,16 @@ from tests.const import CONF_DEVICE_IDS
 _LOGGER = logging.getLogger(__name__)
 
 
-def mock_device(dev_id: str, nodes: List[MagicMock]) -> MagicMock:
-    dev = MagicMock()
+def mock_device(dev_id: str, nodes: List[AsyncMock]) -> AsyncMock:
+    dev = AsyncMock()
     dev.dev_id = dev_id
-    dev.get_nodes = MagicMock(return_value=nodes)
+    dev.get_nodes = AsyncMock(return_value=nodes)
     dev.initialise_nodes = AsyncMock()
     return dev
 
 
-def mock_node(dev_id: str, addr: int, node_type: str, mode="auto") -> MagicMock:
-    node = MagicMock()
+def mock_node(dev_id: str, addr: int, node_type: str, mode="auto") -> AsyncMock:
+    node = AsyncMock()
     node.node_type = node_type
     node.name = f"node_{addr}"
     node.node_id = f"{dev_id}_{addr}"
@@ -42,14 +41,14 @@ def mock_node(dev_id: str, addr: int, node_type: str, mode="auto") -> MagicMock:
         "power": "854",
         "mode": mode,
     }
-    if node_type == HEATER_NODE_TYPE_ACM:
+    if node_type == SmartboxNodeType.ACM:
         node.status["charging"] = True
         node.status["charge_level"] = "4"
     else:
         node.status["active"] = True
-    if node_type == HEATER_NODE_TYPE_HTR:
+    if node_type == SmartboxNodeType.HTR:
         node.status["duty"] = "50"
-    if node_type == HEATER_NODE_TYPE_HTR_MOD:
+    if node_type == SmartboxNodeType.HTR_MOD:
         node.status["on"] = True
         node.status["selected_temp"] = "comfort"
         node.status["comfort_temp"] = "22"
@@ -144,22 +143,26 @@ class MockSmartbox(object):
     def __init__(
         self,
         mock_config,
+        mock_home_info,
         mock_device_info,
         mock_node_info,
         mock_node_setup: Dict[str, Dict[int, SetupDict]],
+        mock_node_away: Dict[str, str],
         mock_node_status: Dict[str, Dict[int, StatusDict]],
         start_available=True,
     ):
         self.config = mock_config
-        assert len(mock_config[DOMAIN]) == 5
+        assert len(mock_config[DOMAIN]) == 4
         config_dev_ids = mock_config[DOMAIN][CONF_DEVICE_IDS]
+        self._home_info = mock_home_info
         self._device_info = mock_device_info
         self._devices = list(map(self._get_device, config_dev_ids))
         self._node_info = mock_node_info
         # socket has most up to date status/setup
         self._socket_node_setup = mock_node_setup
         self._session_node_setup = deepcopy(self._socket_node_setup)
-        self._socket_node_status = mock_node_status
+        self._socket_node_status = deepcopy(mock_node_status)
+        self._mock_node_away = mock_node_away
         if not start_available:
             for dev in self._devices:
                 for node_info in self._node_info[dev["dev_id"]]:
@@ -170,56 +173,77 @@ class MockSmartbox(object):
         self._session_node_status = deepcopy(self._socket_node_status)
 
         self._session = self._create_mock_session()
-        self._sockets: Dict[str, MagicMock] = {}
+        self._sockets: Dict[str, AsyncMock] = {}
 
     def _get_device(self, dev_id):
         return self._device_info[dev_id]
 
     def _create_mock_session(self):
-        mock_session = MagicMock()
+        mock_session = AsyncMock()
         mock_session.get_devices.return_value = self._devices
+        mock_session.resailer = SmartboxResailer(
+            name="Test API name",
+            api_url="test_api_name_1",
+            basic_auth="test_credentials",
+            serial_id=10,
+            web_url="https://web_url/",
+        )
+
+        def get_homes():
+            return self._home_info
+
+        mock_session.get_homes.side_effect = get_homes
 
         def get_nodes(dev_id):
             return self._node_info[dev_id]
 
         mock_session.get_nodes.side_effect = get_nodes
 
-        def get_status(dev_id, node):
+        async def get_node_status(dev_id, node):
             return self._get_session_status(dev_id, node["addr"])
 
-        mock_session.get_status.side_effect = get_status
+        mock_session.get_status.side_effect = get_node_status
+        mock_session.get_node_status.side_effect = get_node_status
 
-        def set_status(dev_id, node, status_updates):
+        async def set_node_status(dev_id, node, status_updates):
             self._socket_node_status[dev_id][node["addr"]].update(status_updates)
             self._session_node_status = self._socket_node_status
 
-        mock_session.set_status = set_status
+        mock_session.set_status = set_node_status
+        mock_session.set_node_status = set_node_status
 
-        def get_setup(dev_id, node):
+        async def get_node_setup(dev_id, node):
             return self._session_node_setup[dev_id][node["addr"]]
 
-        mock_session.get_setup = get_setup
+        mock_session.get_node_setup = get_node_setup
+        mock_session.get_setup = get_node_setup
 
-        def set_setup(dev_id, node, setup_updates):
+        async def get_device_away_status(dev_id):
+            return self._mock_node_away[dev_id]
+
+        mock_session.get_device_away_status = get_device_away_status
+
+        async def set_setup(dev_id, node, setup_updates):
             self._socket_node_setup[dev_id][node["addr"]].update(setup_updates)
             self._session_node_setup = self._socket_node_setup
 
         mock_session.set_setup = set_setup
-
+        mock_session.run = AsyncMock()
         return mock_session
 
     def get_mock_session(
         self,
         api_name: str,
-        basic_auth_credentials: str,
+        # basic_auth_credentials: str,
         username: str,
         password: str,
+        websession,
     ):
         """Patched to custom_components.smartbox.model.Session"""
         return self._session
 
     def _create_mock_socket(self, dev_id, on_dev_data, on_update):
-        mock_socket = MagicMock()
+        mock_socket = AsyncMock()
         mock_socket.dev_id = dev_id
         mock_socket.on_dev_data = on_dev_data
         mock_socket.on_update = on_update
@@ -294,13 +318,13 @@ class MockSmartbox(object):
         status = self._socket_node_status[dev_id][addr]
         temp_increment = 0.1 if status["units"] == "C" else 1
         status["mtemp"] = str(float(status["mtemp"]) + temp_increment)
-        if mock_node["type"] == HEATER_NODE_TYPE_HTR_MOD:
+        if mock_node["type"] == SmartboxNodeType.HTR_MOD:
             status["comfort_temp"] = str(float(status["comfort_temp"]) + temp_increment)
         else:
             status["stemp"] = str(float(status["stemp"]) + temp_increment)
         # always set back to in-sync status
         status["sync_status"] = "ok"
-        if mock_node["type"] != HEATER_NODE_TYPE_HTR_MOD:
+        if mock_node["type"] != SmartboxNodeType.HTR_MOD:
             status["power"] = str(float(status["power"]) + 1)
         self._socket_node_status[dev_id][addr] = status
 
@@ -338,6 +362,6 @@ class MockSmartbox(object):
 def active_or_charging_update(node_type: str, active: bool) -> StatusDict:
     return (
         {"charging": active}
-        if node_type == HEATER_NODE_TYPE_ACM
+        if node_type == SmartboxNodeType.ACM
         else {"active": active}
     )

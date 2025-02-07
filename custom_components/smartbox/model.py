@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -14,19 +15,16 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant
-from smartbox import Session, UpdateManager
+from smartbox import AsyncSmartboxSession, UpdateManager, SmartboxNodeType
 
 from .const import (
     GITHUB_ISSUES_URL,
-    HEATER_NODE_TYPE_ACM,
-    HEATER_NODE_TYPE_HTR_MOD,
     HEATER_NODE_TYPES,
     PRESET_FROST,
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
 )
-from .types import FactoryOptionsDict, SetupDict, StatusDict
+from .types import FactoryOptionsDict, SamplesDict, SetupDict, StatusDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,8 +34,8 @@ class SmartboxDevice:
 
     def __init__(
         self,
-        device,
-        session: Session | MagicMock,
+        device: dict[str, Any],
+        session: AsyncSmartboxSession | MagicMock,
     ) -> None:
         """Initialise a smartbox device."""
         self._device = device
@@ -47,22 +45,28 @@ class SmartboxDevice:
         self._nodes = {}
         self._watchdog_task: asyncio.Task | None = None
 
-    async def initialise_nodes(self, hass: HomeAssistant) -> None:
+    async def initialise_nodes(self) -> None:
         """Initilaise nodes."""
         # Would do in __init__, but needs to be a coroutine
-        session_nodes = await hass.async_add_executor_job(
-            self._session.get_nodes, self.dev_id
-        )
+        session_nodes = await self._session.get_nodes(self.dev_id)
 
         for node_info in session_nodes:
-            status = await hass.async_add_executor_job(
-                self._session.get_status, self.dev_id, node_info
+            status: StatusDict = await self._session.get_node_status(
+                self.dev_id, node_info
             )
-            setup = await hass.async_add_executor_job(
-                self._session.get_setup, self.dev_id, node_info
+            setup: SetupDict = await self._session.get_node_setup(
+                self.dev_id, node_info
             )
-
-            node = SmartboxNode(self, node_info, self._session, status, setup)
+            samples: SamplesDict = await self._session.get_node_samples(
+                self.dev_id,
+                node_info,
+                int(time.time() - (3600 * 3)),
+                int(time.time()),
+            )
+            self._away = (await self._session.get_device_away_status(self.dev_id))[
+                "away"
+            ]
+            node = SmartboxNode(self, node_info, self._session, status, setup, samples)
 
             self._nodes[(node.node_type, node.addr)] = node
 
@@ -94,6 +98,7 @@ class SmartboxDevice:
         node = self._nodes.get((node_type, addr), None)
         if node is not None:
             node.update_status(node_status)
+
         else:
             _LOGGER.error(
                 "Received status update for unknown node %s %s", node_type, addr
@@ -112,8 +117,13 @@ class SmartboxDevice:
             )
 
     @property
+    def home(self):
+        """Return home of the device."""
+        return self._device["home"]
+
+    @property
     def dev_id(self) -> str:
-        """Return the devide id."""
+        """Return the device id."""
         return self._device["dev_id"]
 
     def get_nodes(self):
@@ -147,9 +157,9 @@ class SmartboxDevice:
         """Is the device in away mode."""
         return self._away
 
-    def set_away_status(self, away: bool):
+    async def set_away_status(self, away: bool):
         """Set the away status."""
-        self._session.set_device_away_status(self.dev_id, {"away": away})
+        await self._session.set_device_away_status(self.dev_id, {"away": away})
         self._away = away
 
     @property
@@ -157,9 +167,9 @@ class SmartboxDevice:
         """Get the power limit of the device."""
         return self._power_limit
 
-    def set_power_limit(self, power_limit: int) -> None:
+    async def set_power_limit(self, power_limit: int) -> None:
         """Set the power limit of the device."""
-        self._session.set_device_power_limit(self.dev_id, power_limit)
+        await self._session.set_device_power_limit(self.dev_id, power_limit)
         self._power_limit = power_limit
 
 
@@ -170,9 +180,10 @@ class SmartboxNode:
         self,
         device: SmartboxDevice | MagicMock,
         node_info: dict[str, Any],
-        session: Session | MagicMock,
-        status: dict[str, Any],
-        setup: dict[str, Any],
+        session: AsyncSmartboxSession | MagicMock,
+        status: StatusDict,
+        setup: SetupDict,
+        samples: SamplesDict,
     ) -> None:
         """Initialise a smartbox node."""
         self._device = device
@@ -180,6 +191,12 @@ class SmartboxNode:
         self._session = session
         self._status = status
         self._setup = setup
+        self._samples = samples
+
+    @property
+    def node_info(self) -> dict[str, Any]:
+        """Return the node info."""
+        return self._node_info
 
     @property
     def node_id(self) -> str:
@@ -221,9 +238,11 @@ class SmartboxNode:
         _LOGGER.debug("Updating node %s setup: %s", self.name, setup)
         self._setup = setup
 
-    def set_status(self, **status_args) -> StatusDict:
+    async def set_status(self, **status_args) -> StatusDict:
         """Set status."""
-        self._session.set_status(self._device.dev_id, self._node_info, status_args)
+        await self._session.set_node_status(
+            self._device.dev_id, self._node_info, status_args
+        )
         # update our status locally until we get an update
         self._status |= {**status_args}
         return self._status
@@ -238,11 +257,16 @@ class SmartboxNode:
         """Return the device of the node."""
         return self._device
 
-    def update_device_away_status(self, away: bool):
-        """Update device away status."""
-        self._device.set_away_status(away)
+    @property
+    def session(self):
+        """Return the smartbox session."""
+        return self._session
 
-    async def async_update(self, hass: HomeAssistant) -> StatusDict:
+    async def update_device_away_status(self, away: bool):
+        """Update device away status."""
+        await self._device.set_away_status(away)
+
+    async def async_update(self, _) -> StatusDict:
         """Update status."""
         return self.status
 
@@ -255,12 +279,13 @@ class SmartboxNode:
             )
         return self._setup["window_mode_enabled"]
 
-    def set_window_mode(self, window_mode: bool):
+    async def set_window_mode(self, window_mode: bool) -> bool:
         """Set window mode."""
-        self._session.set_setup(
+        await self._session.set_node_setup(
             self._device.dev_id, self._node_info, {"window_mode_enabled": window_mode}
         )
         self._setup["window_mode_enabled"] = window_mode
+        return window_mode
 
     @property
     def true_radiant(self) -> bool:
@@ -271,9 +296,9 @@ class SmartboxNode:
             )
         return self._setup["true_radiant_enabled"]
 
-    def set_true_radiant(self, true_radiant: bool):
+    async def set_true_radiant(self, true_radiant: bool):
         """Set true radiant."""
-        self._session.set_setup(
+        await self._session.set_node_setup(
             self._device.dev_id, self._node_info, {"true_radiant_enabled": true_radiant}
         )
         self._setup["true_radiant_enabled"] = true_radiant
@@ -282,9 +307,37 @@ class SmartboxNode:
         """Is heating."""
         return (
             status["charging"]
-            if self.node_type == HEATER_NODE_TYPE_ACM
+            if self.node_type == SmartboxNodeType.ACM
             else status["active"]
         )
+
+    async def update_samples(self) -> None:
+        """Update the samples."""
+        sample = await self.get_samples(
+            int(time.time() - (3600 * 3)),
+            int(time.time()),
+        )
+        if len(sample) >= 2:
+            self._samples = sample[-2:]
+            _LOGGER.debug("Updating node %s samples: %s", self.name, self._samples)
+
+    async def get_samples(self, start_time, end_time) -> SamplesDict:
+        """Update the samples."""
+        return await self._session.get_node_samples(
+            self.device.dev_id,
+            self._node_info,
+            start_time,
+            end_time,
+        )
+
+    @property
+    def total_energy(self) -> float | None:
+        """Get the energy used."""
+        samples = self._samples
+        if samples is None or "samples" not in samples or not samples["samples"]:
+            return None
+        sample: list[dict[str, int]] = samples["samples"]
+        return sample[-1]["counter"]
 
 
 def is_heater_node(node: SmartboxNode | MagicMock) -> bool:
@@ -310,31 +363,29 @@ def get_temperature_unit(status) -> None | Any:
 
 
 async def get_devices(
-    hass: HomeAssistant,
-    session: Session,
+    session: AsyncSmartboxSession | MagicMock,
 ) -> list[SmartboxDevice]:
     """Get the devices."""
-    session_devices = await hass.async_add_executor_job(session.get_devices)
-    return [
-        await create_smartbox_device(
-            hass,
-            session_device,
-            session,
-        )
-        for session_device in session_devices
-    ]
+    homes: list[dict[str, Any]] = await session.get_homes()
+    devices: list[SmartboxDevice] = list()
+    for home in homes:
+        _home = home.copy()
+        del _home["devs"]
+        for session_device in home["devs"]:
+            session_device["home"] = _home
+            devices.append(await create_smartbox_device(session_device, session))
+    return devices
 
 
 async def create_smartbox_device(
-    hass: HomeAssistant,
-    device: str,
-    session: Session | MagicMock,
+    device: dict[str, Any],
+    session: AsyncSmartboxSession | MagicMock,
 ) -> SmartboxDevice | MagicMock:
     """Create factory function for smartboxdevices."""
 
-    device = SmartboxDevice(device, session)
-    await device.initialise_nodes(hass)
-    return device
+    _device = SmartboxDevice(device, session)
+    await _device.initialise_nodes()
+    return _device
 
 
 def _check_status_key(key: str, node_type: str, status: dict[str, Any]):
@@ -347,7 +398,7 @@ def _check_status_key(key: str, node_type: str, status: dict[str, Any]):
 
 def get_target_temperature(node_type: str, status: dict[str, Any]) -> float:
     """Get the target temperature."""
-    if node_type == HEATER_NODE_TYPE_HTR_MOD:
+    if node_type == SmartboxNodeType.HTR_MOD:
         _check_status_key("selected_temp", node_type, status)
         if status["selected_temp"] == "comfort":
             _check_status_key("comfort_temp", node_type, status)
@@ -373,7 +424,7 @@ def set_temperature_args(
 ) -> dict[str, Any]:
     """Set targeted temperature."""
     _check_status_key("units", node_type, status)
-    if node_type == HEATER_NODE_TYPE_HTR_MOD:
+    if node_type == SmartboxNodeType.HTR_MOD:
         if status["selected_temp"] == "comfort":
             target_temp = temp
         elif status["selected_temp"] == "eco":
@@ -403,12 +454,12 @@ def set_temperature_args(
     }
 
 
-def get_hvac_mode(node_type: str, status: dict[str, Any]) -> str:
+def get_hvac_mode(node_type: str, status: dict[str, Any]) -> HVACMode | None:
     """Get the mode of HVAC."""
     _check_status_key("mode", node_type, status)
     if (
         status["mode"] == "off"
-        or node_type == HEATER_NODE_TYPE_HTR_MOD
+        or node_type == SmartboxNodeType.HTR_MOD
         and not status["on"]
     ):
         return HVACMode.OFF
@@ -430,7 +481,7 @@ def set_hvac_mode_args(
     node_type: str, status: dict[str, Any], hvac_mode: str
 ) -> dict[str, Any]:
     """Set the mode of HVAC."""
-    if node_type == HEATER_NODE_TYPE_HTR_MOD:
+    if node_type == SmartboxNodeType.HTR_MOD:
         if hvac_mode == HVACMode.OFF:
             return {"on": False}
         if hvac_mode == HVACMode.HEAT:
@@ -479,7 +530,7 @@ def set_preset_mode_status_update(
     node_type: str, status: dict[str, Any], preset_mode: str
 ) -> dict[str, Any]:
     """Set preset mode status update."""
-    if node_type != HEATER_NODE_TYPE_HTR_MOD:
+    if node_type != SmartboxNodeType.HTR_MOD:
         raise ValueError(f"{node_type} nodes do not support preset {preset_mode}")
     # PRESET_HOME and PRESET_AWAY are not handled via status updates
     assert preset_mode not in (PRESET_HOME, PRESET_AWAY)

@@ -9,14 +9,17 @@ from const import (
     DOMAIN,
     MOCK_SMARTBOX_CONFIG,
     MOCK_SMARTBOX_DEVICE_INFO,
+    MOCK_SMARTBOX_HOME_INFO,
     MOCK_SMARTBOX_NODE_INFO,
     MOCK_SMARTBOX_NODE_SETUP,
     MOCK_SMARTBOX_NODE_STATUS,
+    MOCK_SMARTBOX_NODE_AWAY,
 )
 from homeassistant.core import HomeAssistant
 from mocks import MockSmartbox
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_utils import simple_celsius_to_fahrenheit
+from smartbox.resailer import SmartboxResailer
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -24,7 +27,9 @@ pytest_plugins = "pytest_homeassistant_custom_component"
 # This fixture enables loading custom integrations in all tests.
 # Remove to enable selective use of this fixture
 @pytest.fixture(name="auto_enable_custom_integrations", autouse=True)
-def auto_enable_custom_integrations(hass: Any, enable_custom_integrations: Any) -> None:  # noqa: F811
+def auto_enable_custom_integrations(
+    hass: Any, enable_custom_integrations: Any
+) -> None:  # noqa: F811
     """Enable custom integrations defined in the test dir."""
 
 
@@ -59,14 +64,16 @@ def _get_node_status(units: str) -> Dict[str, Any]:
 def mock_smartbox(request):
     mock_smartbox = MockSmartbox(
         MOCK_SMARTBOX_CONFIG,
+        MOCK_SMARTBOX_HOME_INFO,
         MOCK_SMARTBOX_DEVICE_INFO,
         MOCK_SMARTBOX_NODE_INFO,
         deepcopy(MOCK_SMARTBOX_NODE_SETUP),
+        MOCK_SMARTBOX_NODE_AWAY,
         _get_node_status(request.param),
     )
 
     with patch(
-        "custom_components.smartbox.Session",
+        "custom_components.smartbox.AsyncSmartboxSession",
         autospec=True,
         side_effect=mock_smartbox.get_mock_session,
     ):
@@ -82,15 +89,17 @@ def mock_smartbox(request):
 def mock_smartbox_unavailable(request):
     mock_smartbox = MockSmartbox(
         MOCK_SMARTBOX_CONFIG,
+        MOCK_SMARTBOX_HOME_INFO,
         MOCK_SMARTBOX_DEVICE_INFO,
         MOCK_SMARTBOX_NODE_INFO,
         deepcopy(MOCK_SMARTBOX_NODE_SETUP),
+        MOCK_SMARTBOX_NODE_AWAY,
         _get_node_status(request.param),
         False,
     )
 
     with patch(
-        "custom_components.smartbox.Session",
+        "custom_components.smartbox.AsyncSmartboxSession",
         autospec=True,
         side_effect=mock_smartbox.get_mock_session,
     ):
@@ -122,3 +131,52 @@ def mock_config_entry_fixture(hass: HomeAssistant) -> MockConfigEntry:
     mock_entry.add_to_hass(hass)
 
     return mock_entry
+
+
+@pytest.fixture
+def mock_create_smartbox_session():
+    with patch(
+        "custom_components.smartbox.config_flow.create_smartbox_session_from_entry",
+        return_value=AsyncMock(),
+    ) as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_get_devices(mock_devices):
+    with patch("custom_components.smartbox.get_devices", return_value=mock_devices):
+        yield
+
+
+@pytest.fixture
+def mock_session():
+    session = AsyncMock()
+    session.check_refresh_auth = AsyncMock()
+    return session
+
+
+@pytest.fixture
+def mock_devices():
+    device = AsyncMock()
+    device.dev_id = "device_1"
+    device.get_nodes = AsyncMock(return_value=[])
+    return [device]
+
+
+@pytest.fixture
+def resailer(mocker):
+    mock = mocker.patch(
+        "smartbox.resailer.AvailableResailers.resailers",
+        new_callable=mocker.PropertyMock,
+        return_value={
+            "test_api_name_1": SmartboxResailer(
+                name="Test API name",
+                api_url="test_api_name_1",
+                basic_auth="test_credentials",
+                serial_id=10,
+                web_url="https://web_url/",
+            )
+        },
+    )
+
+    yield mock

@@ -2,7 +2,6 @@ from typing import Any, Dict, List
 
 from custom_components.smartbox.const import (
     CONF_API_NAME,
-    CONF_BASIC_AUTH_CREDS,
     CONF_PASSWORD,
     CONF_SESSION_BACKOFF_FACTOR,
     CONF_SESSION_RETRY_ATTEMPTS,
@@ -10,9 +9,7 @@ from custom_components.smartbox.const import (
     CONF_SOCKET_RECONNECT_ATTEMPTS,
     CONF_USERNAME,
     DOMAIN,
-    HEATER_NODE_TYPE_ACM,
-    HEATER_NODE_TYPE_HTR,
-    HEATER_NODE_TYPE_HTR_MOD,
+    SmartboxNodeType,
 )
 
 CONF_DEVICE_IDS = "device_ids"
@@ -23,7 +20,6 @@ MOCK_SMARTBOX_CONFIG = {
         CONF_USERNAME: "test_username_1",
         CONF_PASSWORD: "test_password_1",
         CONF_DEVICE_IDS: ["device_1", "device_2"],
-        CONF_BASIC_AUTH_CREDS: "test_basic_auth_creds",
     }
 }
 
@@ -35,6 +31,7 @@ MOCK_SESSION_CONFIG = {
         CONF_SOCKET_BACKOFF_FACTOR: 0.5,
     }
 }
+
 
 MOCK_SMARTBOX_DEVICE_INFO = {
     "device_1": {
@@ -53,12 +50,21 @@ MOCK_SMARTBOX_DEVICE_INFO = {
     },
 }
 
+MOCK_SMARTBOX_HOME_INFO = [
+    {
+        "id": "home_1",
+        "name": "Home 1",
+        "owner": True,
+        "devs": [item for item in MOCK_SMARTBOX_DEVICE_INFO.values()],
+    },
+]
+
 MOCK_SMARTBOX_NODE_INFO = {
     "device_1": [
         {
             "addr": 0,
             "name": "Device 1 0",
-            "type": HEATER_NODE_TYPE_HTR,
+            "type": SmartboxNodeType.HTR,
             "product_id": "product_id_1_0",
             "fw_version": "fw_version_1_0",
             "serial_id": "serial_id_1_0",
@@ -66,7 +72,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 1,
             "name": "Device 1 1",
-            "type": HEATER_NODE_TYPE_ACM,
+            "type": SmartboxNodeType.ACM,
             "product_id": "product_id_1_1",
             "fw_version": "fw_version_1_1",
             "serial_id": "serial_id_1_1",
@@ -76,7 +82,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 0,
             "name": "Device 2 0",
-            "type": HEATER_NODE_TYPE_HTR_MOD,
+            "type": SmartboxNodeType.HTR_MOD,
             "product_id": "product_id_2_0",
             "fw_version": "fw_version_2_0",
             "serial_id": "serial_id_2_0",
@@ -84,7 +90,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 1,
             "name": "Device 2 1",
-            "type": HEATER_NODE_TYPE_HTR_MOD,
+            "type": SmartboxNodeType.HTR_MOD,
             "product_id": "product_id_2_1",
             "fw_version": "fw_version_2_1",
             "serial_id": "serial_id_2_1",
@@ -92,7 +98,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 2,
             "name": "Device 2 2",
-            "type": HEATER_NODE_TYPE_HTR_MOD,
+            "type": SmartboxNodeType.HTR_MOD,
             "product_id": "product_id_2_2",
             "fw_version": "fw_version_2_2",
             "serial_id": "serial_id_2_2",
@@ -100,7 +106,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 3,
             "name": "Device 2 3",
-            "type": HEATER_NODE_TYPE_HTR_MOD,
+            "type": SmartboxNodeType.HTR_MOD,
             "product_id": "product_id_2_3",
             "fw_version": "fw_version_2_3",
             "serial_id": "serial_id_2_3",
@@ -108,7 +114,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 4,
             "name": "Device 2 4",
-            "type": HEATER_NODE_TYPE_HTR_MOD,
+            "type": SmartboxNodeType.HTR_MOD,
             "product_id": "product_id_2_4",
             "fw_version": "fw_version_2_4",
             "serial_id": "serial_id_2_4",
@@ -116,7 +122,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 5,
             "name": "Device 2 5",
-            "type": HEATER_NODE_TYPE_HTR_MOD,
+            "type": SmartboxNodeType.HTR_MOD,
             "product_id": "product_id_2_5",
             "fw_version": "fw_version_2_5",
             "serial_id": "serial_id_2_5",
@@ -186,6 +192,11 @@ MOCK_SMARTBOX_NODE_SETUP: Dict[str, List[Dict[str, Any]]] = {
             # Test factory_options missing
         },
     ],
+}
+
+MOCK_SMARTBOX_NODE_AWAY: Dict[str, List[Dict[str, Any]]] = {
+    "device_1": {"enabled": True, "away": True, "forced": True},
+    "device_2": {"enabled": False, "away": False, "forced": False},
 }
 
 MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
