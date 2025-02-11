@@ -1,9 +1,13 @@
 """Draft of generic entity"""
 
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
-from custom_components.smartbox.const import DOMAIN, CONF_DISPLAY_ENTITY_PICTURES
+from custom_components.smartbox.const import CONF_DISPLAY_ENTITY_PICTURES, DOMAIN
 from custom_components.smartbox.model import SmartboxDevice, SmartboxNode
 
 
@@ -12,6 +16,7 @@ class DefaultSmartBoxEntity(Entity):
 
     _node: SmartboxNode
     _attr_key: str
+    _attr_websocket_event: str
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize the default Device Entity."""
@@ -42,6 +47,12 @@ class DefaultSmartBoxEntity(Entity):
             configuration_url=self._configuration_url,
         )
 
+    @callback
+    def _async_update(self, data: Any) -> None:
+        """Update the state."""
+        self._attr_state = data
+        self.async_write_ha_state()
+
 
 class SmartBoxDeviceEntity(DefaultSmartBoxEntity):
     """BaseClass for SmartBoxDeviceEntity."""
@@ -52,6 +63,14 @@ class SmartBoxDeviceEntity(DefaultSmartBoxEntity):
         self._device = device
         super().__init__(entry=entry)
 
+    async def async_added_to_hass(self) -> None:
+        """Register callbacks."""
+        async_dispatcher_connect(
+            self.hass,
+            f"{DOMAIN}_{self._node.device.dev_id}_{self._attr_websocket_event}",
+            self._async_update,
+        )
+
 
 class SmartBoxNodeEntity(DefaultSmartBoxEntity):
     """BaseClass for SmartBoxNodeEntity."""
@@ -60,3 +79,11 @@ class SmartBoxNodeEntity(DefaultSmartBoxEntity):
         """Initialize the Node Entity."""
         self._node = node
         super().__init__(entry=entry)
+
+    async def async_added_to_hass(self) -> None:
+        """Register callbacks."""
+        async_dispatcher_connect(
+            self.hass,
+            f"{DOMAIN}_{self._node.node_id}_{self._attr_websocket_event}",
+            self._async_update,
+        )
