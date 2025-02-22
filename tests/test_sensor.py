@@ -4,17 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_LOCKED, STATE_UNAVAILABLE
-from mocks import (
-    active_or_charging_update,
-    get_entity_id_from_unique_id,
-    get_node_unique_id,
-    get_object_id,
-    get_sensor_entity_id,
-    get_sensor_entity_name,
-)
-from pytest import approx
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_utils import convert_temp, round_temp
 
 from custom_components.smartbox.const import (
     CONF_HISTORY_CONSUMPTION,
@@ -22,12 +13,18 @@ from custom_components.smartbox.const import (
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
-from custom_components.smartbox.sensor import TotalConsumptionSensor
-from custom_components.smartbox.const import CONF_AUTO_ADD_ENERGY_DEVICES
-from homeassistant.components.energy.data import (
-    EnergyPreferences,
-    DeviceConsumption,
+from custom_components.smartbox.sensor import PowerSensor, TotalConsumptionSensor
+
+from .mocks import (
+    active_or_charging_update,
+    get_entity_id_from_unique_id,
+    get_node_unique_id,
+    get_object_id,
+    get_sensor_entity_id,
+    get_sensor_entity_name,
+    is_heater_node,
 )
+from .test_utils import convert_temp, round_temp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,7 +39,7 @@ def _check_temp_state(hass, mock_node_status, state):
 async def test_basic_temp(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 14
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -50,6 +47,8 @@ async def test_basic_temp(hass, mock_smartbox, config_entry):
 
     for mock_device in await mock_smartbox.session.get_devices():
         for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
+            if not is_heater_node(mock_node):
+                continue
             entity_id = get_sensor_entity_id(mock_node, "temperature")
             state = hass.states.get(entity_id)
 
@@ -62,8 +61,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry):
             )
             assert state.name == f"{mock_node['name']} Temperature"
             assert (
-                state.attributes[ATTR_FRIENDLY_NAME]
-                == f"{mock_node['name']} Temperature"
+                state.attributes[ATTR_FRIENDLY_NAME] == f"{mock_node['name']} Temperature"
             )
             unique_id = get_node_unique_id(mock_device, mock_node, "temperature")
             assert entity_id == get_entity_id_from_unique_id(
@@ -106,7 +104,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry):
 async def test_basic_power(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 14
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -114,7 +112,10 @@ async def test_basic_power(hass, mock_smartbox, config_entry):
 
     for mock_device in await mock_smartbox.session.get_devices():
         for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
-            if mock_node["type"] == SmartboxNodeType.HTR_MOD:
+            if (
+                not is_heater_node(mock_node)
+                or mock_node["type"] == SmartboxNodeType.HTR_MOD
+            ):
                 continue
             entity_id = get_sensor_entity_id(mock_node, "power")
             state = hass.states.get(entity_id)
@@ -135,7 +136,7 @@ async def test_basic_power(hass, mock_smartbox, config_entry):
             mock_smartbox.generate_socket_status_update(
                 mock_device,
                 mock_node,
-                active_or_charging_update(mock_node["type"], True),
+                active_or_charging_update(node_type=mock_node["type"], active=True),
             )
             await hass.helpers.entity_component.async_update_entity(entity_id)
             state = hass.states.get(entity_id)
@@ -143,13 +144,13 @@ async def test_basic_power(hass, mock_smartbox, config_entry):
                 mock_device["dev_id"], mock_node
             )
             assert state.attributes[ATTR_LOCKED] == mock_node_status["locked"]
-            assert float(state.state) == approx(float(mock_node_status["power"]))
+            assert float(state.state) == pytest.approx(float(mock_node_status["power"]))
 
             # make sure it's inactive/not charging
             mock_smartbox.generate_socket_status_update(
                 mock_device,
                 mock_node,
-                active_or_charging_update(mock_node["type"], False),
+                active_or_charging_update(node_type=mock_node["type"], active=False),
             )
             await hass.helpers.entity_component.async_update_entity(entity_id)
             state = hass.states.get(entity_id)
@@ -183,7 +184,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 14
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -193,12 +194,14 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
         for mock_node in await mock_smartbox_unavailable.session.get_nodes(
             mock_device["dev_id"]
         ):
+            if not is_heater_node(mock_node):
+                continue
             sensor_types = (
                 ["temperature"]
                 if mock_node["type"] == SmartboxNodeType.HTR_MOD
                 else ["temperature", "power"]
             )
-            for sensor_type in sensor_types:
+            for _sensor_type in sensor_types:
                 entity_id = get_sensor_entity_id(mock_node, "temperature")
 
                 state = hass.states.get(entity_id)
@@ -208,7 +211,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
 async def test_basic_charge_level(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 14
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -244,7 +247,7 @@ async def test_basic_charge_level(hass, mock_smartbox, config_entry):
             mock_smartbox.generate_socket_status_update(
                 mock_device,
                 mock_node,
-                active_or_charging_update(mock_node["type"], True),
+                active_or_charging_update(node_type=mock_node["type"], active=True),
             )
             await hass.helpers.entity_component.async_update_entity(entity_id)
             state = hass.states.get(entity_id)
@@ -252,7 +255,9 @@ async def test_basic_charge_level(hass, mock_smartbox, config_entry):
                 mock_device["dev_id"], mock_node
             )
             assert state.attributes[ATTR_LOCKED] == mock_node_status["locked"]
-            assert int(state.state) == approx(int(mock_node_status["charge_level"]))
+            assert int(state.state) == pytest.approx(
+                int(mock_node_status["charge_level"])
+            )
 
             # Update charge level via socket
             mock_smartbox.generate_socket_status_update(
@@ -284,7 +289,7 @@ async def test_basic_charge_level(hass, mock_smartbox, config_entry):
 async def test_update_statistics_start(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
     mock_node.get_samples = AsyncMock(
-        return_value={"samples": [{"t": time.time(), "counter": 100}]}
+        return_value={"samples": [{"t": 1739966400, "counter": 100}]}
     )
     sensor = TotalConsumptionSensor(mock_node, config_entry)
     sensor.hass = hass
@@ -321,7 +326,7 @@ async def test_update_statistics_auto(hass, mock_smartbox, config_entry):
 
     mock_node = AsyncMock()
     mock_node.get_samples = AsyncMock(
-        return_value={"samples": [{"t": time.time(), "counter": 100}]}
+        return_value={"samples": [{"t": 1739966400, "counter": 100}]}
     )
     sensor = TotalConsumptionSensor(mock_node, config_entry)
     sensor.hass = hass
@@ -365,75 +370,29 @@ async def test_update_statistics_off(hass, mock_smartbox, config_entry):
         mock_import_statistics.assert_not_called()
 
 
-async def test_energy_dashboard_auto_add_enabled(hass, mock_smartbox, config_entry):
+async def test_async_update_pmo(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
+    mock_node.node_type = SmartboxNodeType.PMO
+    mock_node.update_power = AsyncMock()
+    sensor = PowerSensor(mock_node, config_entry)
     sensor.hass = hass
-    hass.config_entries.async_update_entry(
-        entry=config_entry,
-        options={CONF_AUTO_ADD_ENERGY_DEVICES: True},
-    )
 
-    with (
-        patch(
-            "custom_components.smartbox.sensor.async_get_manager"
-        ) as mock_async_get_manager,
-        patch("custom_components.smartbox.sensor._LOGGER.debug") as mock_logger_debug,
-    ):
-        mock_energy_manager = AsyncMock()
-        mock_async_get_manager.return_value = mock_energy_manager
-        mock_energy_manager.data = {"device_consumption": []}
-        await sensor.energy_dashboard()
-        mock_async_get_manager.assert_called()
-        mock_logger_debug.assert_called_with(
-            "Adding the device %s to energy dashboard", sensor.entity_id
-        )
-        mock_energy_manager.async_update.assert_called_with(
-            EnergyPreferences(
-                device_consumption=[
-                    DeviceConsumption(stat_consumption=sensor.entity_id)
-                ]
-            )
-        )
+    with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
+        await sensor._async_update_pmo(None)
+
+        mock_node.update_power.assert_called_once()
+        mock_write_ha_state.assert_called_once()
 
 
-async def test_energy_dashboard_auto_add_disabled(hass, mock_smartbox, config_entry):
+async def test_async_update_pmo_non_pmo_node(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
+    mock_node.node_type = SmartboxNodeType.HTR
+    mock_node.update_power = AsyncMock()
+    sensor = PowerSensor(mock_node, config_entry)
     sensor.hass = hass
-    hass.config_entries.async_update_entry(
-        entry=config_entry,
-        options={CONF_AUTO_ADD_ENERGY_DEVICES: False},
-    )
 
-    with patch(
-        "custom_components.smartbox.sensor.async_get_manager"
-    ) as mock_async_get_manager:
-        await sensor.energy_dashboard()
-        mock_async_get_manager.assert_not_called()
+    with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
+        await sensor._async_update_pmo(None)
 
-
-async def test_energy_dashboard_device_already_added(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
-    sensor.hass = hass
-    hass.config_entries.async_update_entry(
-        entry=config_entry,
-        options={CONF_AUTO_ADD_ENERGY_DEVICES: True},
-    )
-
-    with (
-        patch(
-            "custom_components.smartbox.sensor.async_get_manager"
-        ) as mock_async_get_manager,
-        patch("custom_components.smartbox.sensor._LOGGER.debug") as mock_logger_debug,
-    ):
-        mock_energy_manager = AsyncMock()
-        mock_async_get_manager.return_value = mock_energy_manager
-        mock_energy_manager.data = {
-            "device_consumption": [{"stat_consumption": sensor.entity_id}]
-        }
-        await sensor.energy_dashboard()
-        mock_async_get_manager.assert_called()
-        mock_logger_debug.assert_not_called()
-        mock_energy_manager.async_update.assert_not_called()
+        mock_node.update_power.assert_not_called()
+        mock_write_ha_state.assert_not_called()

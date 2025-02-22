@@ -3,15 +3,10 @@
 import logging
 from typing import Any
 
-import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
-from homeassistant.config_entries import (
-    ConfigFlow,
-    ConfigFlowResult,
-    FlowResult,
-    OptionsFlow,
-)
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.selector import (
     BooleanSelector,
     SelectOptionDict,
@@ -23,6 +18,7 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 from smartbox import AvailableResailers
+import voluptuous as vol
 
 from . import (
     APIUnavailableError,
@@ -35,14 +31,8 @@ from .const import (
     CONF_API_NAME,
     CONF_DISPLAY_ENTITY_PICTURES,
     CONF_HISTORY_CONSUMPTION,
-    CONF_PASSWORD,
-    CONF_SESSION_BACKOFF_FACTOR,
-    CONF_SESSION_RETRY_ATTEMPTS,
-    CONF_SOCKET_BACKOFF_FACTOR,
-    CONF_SOCKET_RECONNECT_ATTEMPTS,
-    CONF_USERNAME,
-    DEFAULT_SESSION_RETRY_ATTEMPTS,
-    DEFAULT_SOCKET_BACKOFF_FACTOR,
+    CONF_TIMEDELTA_POWER,
+    DEFAULT_TIMEDELTA_POWER,
     DOMAIN,
     HistoryConsumptionStatus,
 )
@@ -68,16 +58,7 @@ OPTIONS_DATA_SCHEMA = {
         )
     ),
     vol.Required(CONF_DISPLAY_ENTITY_PICTURES, default=False): BooleanSelector(),
-    vol.Required(
-        CONF_SESSION_RETRY_ATTEMPTS,
-        default=DEFAULT_SESSION_RETRY_ATTEMPTS,
-    ): cv.positive_int,
-    vol.Required(
-        CONF_SESSION_BACKOFF_FACTOR,
-        default=DEFAULT_SOCKET_BACKOFF_FACTOR,
-    ): cv.small_float,
-    vol.Required(CONF_SOCKET_RECONNECT_ATTEMPTS, default=3): cv.positive_int,
-    vol.Required(CONF_SOCKET_BACKOFF_FACTOR, default=0.1): cv.small_float,
+    vol.Required(CONF_TIMEDELTA_POWER, default=DEFAULT_TIMEDELTA_POWER): cv.positive_int,
 }
 
 
@@ -97,7 +78,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
-class ConfigFlow(ConfigFlow, domain=DOMAIN):
+class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for test."""
 
     VERSION = 1
@@ -194,16 +175,16 @@ class OptionsFlowHandler(OptionsFlow):
     """Options flow."""
 
     def __init__(self, config_entry: SmartboxConfigEntry) -> None:
-        """Initialisation of class."""
+        """Initialise class."""
         self.config_entry_options = config_entry.options
 
-    async def async_step_init(self, user_input: dict | None = None) -> ConfigFlowResult:
+    async def async_step_init(self, _: dict | None = None) -> ConfigFlowResult:
         """Manage the Netatmo options."""
         return await self.async_step_options()
 
     async def async_step_options(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title=None, data=user_input)

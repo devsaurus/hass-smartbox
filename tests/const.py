@@ -1,16 +1,10 @@
-from typing import Any, Dict, List
+"""Const file for testing."""
 
-from custom_components.smartbox.const import (
-    CONF_API_NAME,
-    CONF_PASSWORD,
-    CONF_SESSION_BACKOFF_FACTOR,
-    CONF_SESSION_RETRY_ATTEMPTS,
-    CONF_SOCKET_BACKOFF_FACTOR,
-    CONF_SOCKET_RECONNECT_ATTEMPTS,
-    CONF_USERNAME,
-    DOMAIN,
-    SmartboxNodeType,
-)
+from typing import Any
+
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+
+from custom_components.smartbox.const import CONF_API_NAME, DOMAIN, SmartboxNodeType
 
 CONF_DEVICE_IDS = "device_ids"
 
@@ -23,14 +17,7 @@ MOCK_SMARTBOX_CONFIG = {
     }
 }
 
-MOCK_SESSION_CONFIG = {
-    DOMAIN: {
-        CONF_SESSION_RETRY_ATTEMPTS: 7,
-        CONF_SESSION_BACKOFF_FACTOR: 0.4,
-        CONF_SOCKET_RECONNECT_ATTEMPTS: 6,
-        CONF_SOCKET_BACKOFF_FACTOR: 0.5,
-    }
-}
+MOCK_SESSION_CONFIG = {DOMAIN: {}}
 
 
 MOCK_SMARTBOX_DEVICE_INFO = {
@@ -55,7 +42,7 @@ MOCK_SMARTBOX_HOME_INFO = [
         "id": "home_1",
         "name": "Home 1",
         "owner": True,
-        "devs": [item for item in MOCK_SMARTBOX_DEVICE_INFO.values()],
+        "devs": list(MOCK_SMARTBOX_DEVICE_INFO.values()),
     },
 ]
 
@@ -82,7 +69,7 @@ MOCK_SMARTBOX_NODE_INFO = {
         {
             "addr": 0,
             "name": "Device 2 0",
-            "type": SmartboxNodeType.HTR_MOD,
+            "type": SmartboxNodeType.PMO,
             "product_id": "product_id_2_0",
             "fw_version": "fw_version_2_0",
             "serial_id": "serial_id_2_0",
@@ -130,7 +117,7 @@ MOCK_SMARTBOX_NODE_INFO = {
     ],
 }
 
-MOCK_SMARTBOX_NODE_SETUP: Dict[str, List[Dict[str, Any]]] = {
+MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
     "device_1": [
         {
             "factory_options": {
@@ -149,12 +136,10 @@ MOCK_SMARTBOX_NODE_SETUP: Dict[str, List[Dict[str, Any]]] = {
     ],
     "device_2": [
         {
-            "factory_options": {
-                "true_radiant_available": True,
-                "window_mode_available": True,
-            },
-            "true_radiant_enabled": True,
-            "window_mode_enabled": True,
+            "circuit_type": 0,
+            "power_limit": 1500,
+            "reverse": False,
+            "power": 1500,
         },
         {
             "factory_options": {
@@ -194,22 +179,40 @@ MOCK_SMARTBOX_NODE_SETUP: Dict[str, List[Dict[str, Any]]] = {
     ],
 }
 
-MOCK_SMARTBOX_NODE_AWAY: Dict[str, List[Dict[str, Any]]] = {
+MOCK_SMARTBOX_NODE_AWAY: dict[str, list[dict[str, Any]]] = {
     "device_1": {"enabled": True, "away": True, "forced": True},
     "device_2": {"enabled": False, "away": False, "forced": False},
 }
 
-MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
+MOCK_SMARTBOX_DEVICE_POWER: dict[str, list[dict[str, Any]]] = {
+    "device_1": 1500,
+    "device_2": 1000,
+}
+
+MOCK_SMARTBOX_NODE_STATUS: dict[str, list[dict[str, Any]]] = {
     "device_1": [
         {
+            "ice_temp": "5.0",
+            "eco_temp": "18.0",
+            "comf_temp": "22.0",
+            "act_duty": 45,
+            "pcb_temp": "30.0",
+            "power_pcb_temp": "35.0",
+            "presence": True,
+            "window_open": False,
+            "true_radiant_active": True,
+            "boost": False,
+            "boost_end_min": 0,
+            "boost_end_day": 0,
+            "error_code": "none",
             "mtemp": "25.7",
             "stemp": "20.3",
             "units": "C",
             "sync_status": "ok",
-            "locked": False,
+            "locked": 0,
             "active": True,
             "power": "510",
-            "duty": "50",
+            "duty": 50,
             "mode": "auto",
         },
         {
@@ -222,22 +225,16 @@ MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
             "charging": True,
             "charge_level": 2,
             "power": "620",
-            "mode": "manual",
+            "mode": "auto",
         },
     ],
     "device_2": [
         {
-            "on": True,
-            "mtemp": "23.7",
-            "selected_temp": "comfort",
-            "comfort_temp": "20.3",
-            "eco_offset": "4",
-            "ice_temp": "7",
-            "units": "C",
             "sync_status": "ok",
             "locked": False,
+            "power": "2500",
             "active": True,
-            "mode": "auto",
+            "mtemp": "19.2",
         },
         {
             "on": True,
@@ -251,6 +248,7 @@ MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
             "locked": False,
             "active": True,
             "mode": "manual",
+            "power": "510",
         },
         {
             "on": True,
@@ -264,6 +262,7 @@ MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
             "locked": False,
             "active": True,
             "mode": "manual",
+            "power": "510",
         },
         {
             "on": True,
@@ -277,6 +276,7 @@ MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
             "locked": False,
             "active": True,
             "mode": "manual",
+            "power": "510",
         },
         {
             "on": True,
@@ -290,6 +290,7 @@ MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
             "locked": False,
             "active": True,
             "mode": "self_learn",
+            "power": "510",
         },
         {
             "on": True,
@@ -303,6 +304,7 @@ MOCK_SMARTBOX_NODE_STATUS: Dict[str, List[Dict[str, Any]]] = {
             "locked": False,
             "active": True,
             "mode": "presence",
+            "power": "510",
         },
     ],
 }

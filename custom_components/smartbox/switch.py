@@ -8,14 +8,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import SmartboxConfigEntry
-from .entity import SmartBoxDeviceEntity, SmartBoxNodeEntity
+from .entity import SmartBoxNodeEntity
 from .model import true_radiant_available, window_mode_available
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    _: HomeAssistant,
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:  # pylint: disable=unused-argument
@@ -23,10 +23,6 @@ async def async_setup_entry(
     _LOGGER.debug("Setting up Smartbox switch platform")
 
     switch_entities: list[SwitchEntity] = []
-    for device in entry.runtime_data.devices:
-        _LOGGER.debug("Creating away switch for device %s", device.name)
-        switch_entities.append(AwaySwitch(device, entry))
-
     for node in entry.runtime_data.nodes:
         if window_mode_available(node):
             _LOGGER.debug("Creating window_mode switch for node %s", node.name)
@@ -38,30 +34,34 @@ async def async_setup_entry(
             switch_entities.append(TrueRadiantSwitch(node, entry))
         else:
             _LOGGER.info("True radiant not available for node %s", node.name)
+        _LOGGER.debug("Creating away switch for node %s", node.name)
+        switch_entities.append(AwaySwitch(node, entry))
 
-    async_add_entities(switch_entities, True)
+    async_add_entities(switch_entities, update_before_add=True)
 
     _LOGGER.debug("Finished setting up Smartbox switch platform")
 
 
-class AwaySwitch(SmartBoxDeviceEntity, SwitchEntity):
+class AwaySwitch(SmartBoxNodeEntity, SwitchEntity):
     """Smartbox device away switch."""
 
     _attr_key = "away_status"
     _attr_websocket_event = "away_status"
 
-    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn on the switch."""
-        return await self._device.set_away_status(True)
+        await self._node.device.set_away_status(away=True)
+        self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn off the switch."""
-        return await self._device.set_away_status(False)
+        await self._node.device.set_away_status(away=False)
+        self.async_write_ha_state()
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool:
         """Return true if the switch is on."""
-        return self._device.away
+        return self._node.device.away
 
 
 class WindowModeSwitch(SmartBoxNodeEntity, SwitchEntity):
@@ -71,16 +71,16 @@ class WindowModeSwitch(SmartBoxNodeEntity, SwitchEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_websocket_event = "setup"
 
-    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn on the switch."""
-        return await self._node.set_window_mode(True)
+        await self._node.set_window_mode(True)
 
-    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn off the switch."""
-        return await self._node.set_window_mode(False)
+        await self._node.set_window_mode(False)
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool:
         """Return true if the switch is on."""
         return self._node.window_mode
 
@@ -92,15 +92,15 @@ class TrueRadiantSwitch(SmartBoxNodeEntity, SwitchEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_websocket_event = "setup"
 
-    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn on the switch."""
-        return await self._node.set_true_radiant(True)
+        await self._node.set_true_radiant(True)
 
-    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn off the switch."""
-        return await self._node.set_true_radiant(False)
+        await self._node.set_true_radiant(False)
 
     @property
-    def is_on(self):
+    def is_on(self) -> bool:
         """Return true if the switch is on."""
         return self._node.true_radiant

@@ -12,6 +12,7 @@ from homeassistant.components.climate import (
     PRESET_COMFORT,
     PRESET_ECO,
     PRESET_HOME,
+    PRESET_NONE,
     HVACMode,
 )
 from homeassistant.const import UnitOfTemperature
@@ -27,7 +28,7 @@ from .const import (
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
 )
-from .types import FactoryOptionsDict, SamplesDict, SetupDict, StatusDict, Device, Node
+from .types import Device, FactoryOptionsDict, Node, SamplesDict, SetupDict, StatusDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,56 +45,81 @@ class SmartboxDevice:
         """Initialise a smartbox device."""
         self._device = device
         self._session = session
-        self._away = False
+        self._away: bool = False
         self._power_limit: int = 0
         self._nodes = {}
         self._watchdog_task: asyncio.Task | None = None
         self._hass = hass
+        self._connected_status: bool | None = None
+        self.update_manager: UpdateManager = UpdateManager(
+            self._session,
+            self.dev_id,
+        )
 
     async def initialise_nodes(self) -> None:
         """Initilaise nodes."""
         # Would do in __init__, but needs to be a coroutine
+        self._connected_status = (await self._session.get_device_connected(self.dev_id))[
+            "connected"
+        ]
         session_nodes: list[Node] = await self._session.get_nodes(self.dev_id)
 
         for node_info in session_nodes:
-            status: StatusDict = await self._session.get_node_status(
-                self.dev_id, node_info
-            )
-            setup: SetupDict = await self._session.get_node_setup(
-                self.dev_id, node_info
-            )
+            status: StatusDict
+            if node_info["type"] != SmartboxNodeType.PMO:
+                status = await self._session.get_node_status(self.dev_id, node_info)
+            else:
+                status = {
+                    "sync_status": "ok",
+                    "locked": False,
+                    "power": await self._session.get_device_power_limit(
+                        self.dev_id, node_info
+                    ),
+                }
+                self._power_limit = await self._session.get_device_power_limit(
+                    self.dev_id
+                )
+            setup: SetupDict = await self._session.get_node_setup(self.dev_id, node_info)
             samples: SamplesDict = await self._session.get_node_samples(
                 self.dev_id,
                 node_info,
                 int(time.time() - (3600 * 3)),
                 int(time.time()),
             )
-            self._away = (await self._session.get_device_away_status(self.dev_id))[
-                "away"
-            ]
-            node = SmartboxNode(self, node_info, self._session, status, setup, samples)
+            self._away = (await self._session.get_device_away_status(self.dev_id))["away"]
+            node: SmartboxNode = SmartboxNode(
+                self, node_info, self._session, status, setup, samples
+            )
 
             self._nodes[(node.node_type, node.addr)] = node
         _LOGGER.debug("Creating SocketSession for device %s", self.dev_id)
-        update_manager = UpdateManager(
-            self._session,
-            self.dev_id,
-        )
-        update_manager.subscribe_to_device_away_status(self._away_status_update)
-        update_manager.subscribe_to_device_power_limit(self._power_limit_update)
-        update_manager.subscribe_to_node_status(self._node_status_update)
-        update_manager.subscribe_to_node_setup(self._node_setup_update)
+        self.update_manager.subscribe_to_device_connected(self._connected)
+        self.update_manager.subscribe_to_device_away_status(self._away_status_update)
+        self.update_manager.subscribe_to_node_setup(self._node_setup_update)
+        self.update_manager.subscribe_to_device_power_limit(self._power_limit_update)
+        self.update_manager.subscribe_to_node_status(self._node_status_update)
 
         _LOGGER.debug("Starting UpdateManager task for device %s", self.dev_id)
-        self._watchdog_task = asyncio.create_task(update_manager.run())
+        self._watchdog_task = asyncio.create_task(self.update_manager.run())
+
+    def _connected(self, connected: bool) -> None:
+        _LOGGER.debug("Connected connected update: %s", connected)
+        self._connected_status = connected
+        async_dispatcher_send(
+            self._hass,
+            f"{DOMAIN}_{self.dev_id}_connected",
+            self._connected_status,
+        )
 
     def _away_status_update(self, away_status: dict[str, bool]) -> None:
         _LOGGER.debug("Away status update: %s", away_status)
+
         if self._away != away_status["away"]:
             self._away = away_status["away"]
-            async_dispatcher_send(
-                self._hass, f"{DOMAIN}_{self.dev_id}_away_status", self._away
-            )
+            for node in self._nodes.values():
+                async_dispatcher_send(
+                    self._hass, f"{DOMAIN}_{node.node_id}_away_status", self._away
+                )
 
     def _power_limit_update(self, power_limit: int) -> None:
         _LOGGER.debug("power_limit update: %s", power_limit)
@@ -106,8 +132,10 @@ class SmartboxDevice:
     def _node_status_update(
         self, node_type: str, addr: int, node_status: StatusDict
     ) -> None:
+        if node_type == SmartboxNodeType.PMO:
+            return
         _LOGGER.debug("Node status update: %s", node_status)
-        if (node_type, addr) in self._nodes:
+        if node_status is not None and (node_type, addr) in self._nodes:
             node: SmartboxNode | None = self._nodes.get((node_type, addr), None)
             if node is not None and node.status != node_status:
                 node.update_status(node_status)
@@ -131,17 +159,20 @@ class SmartboxDevice:
                     self._hass, f"{DOMAIN}_{node.node_id}_setup", node_setup
                 )
         else:
-            _LOGGER.error(
-                "Received setup update for unknown node %s %s", node_type, addr
-            )
+            _LOGGER.error("Received setup update for unknown node %s %s", node_type, addr)
 
     @property
-    def device(self):
+    def device(self) -> Device:
         """Return the device."""
         return self._device
 
     @property
-    def home(self):
+    def connected(self) -> bool | None:
+        """Return the device."""
+        return self._connected_status
+
+    @property
+    def home(self) -> dict[str, Any]:
         """Return home of the device."""
         return self._device["home"]
 
@@ -150,7 +181,7 @@ class SmartboxDevice:
         """Return the device id."""
         return self._device["dev_id"]
 
-    def get_nodes(self):
+    def get_nodes(self) -> list["SmartboxNode"]:
         """Return all nodes."""
         for item in self._nodes:
             _LOGGER.debug("Get_nodes: %s", item)
@@ -181,10 +212,10 @@ class SmartboxDevice:
         """Is the device in away mode."""
         return self._away
 
-    async def set_away_status(self, away: bool):
+    async def set_away_status(self, away: bool) -> None:
         """Set the away status."""
         await self._session.set_device_away_status(self.dev_id, {"away": away})
-        self._away = away
+        self._away_status_update(away_status={"away": away})
 
     @property
     def power_limit(self) -> int:
@@ -262,7 +293,7 @@ class SmartboxNode:
         _LOGGER.debug("Updating node %s setup: %s", self.name, setup)
         self._setup = setup
 
-    async def set_status(self, **status_args) -> StatusDict:
+    async def set_status(self, **status_args: StatusDict) -> StatusDict:
         """Set status."""
         await self._session.set_node_status(
             self._device.dev_id, self._node_info, status_args
@@ -272,25 +303,25 @@ class SmartboxNode:
         return self._status
 
     @property
-    def away(self):
+    def away(self) -> bool:
         """Is away mode."""
         return self._device.away
 
     @property
-    def device(self):
+    def device(self) -> SmartboxDevice:
         """Return the device of the node."""
         return self._device
 
     @property
-    def session(self):
+    def session(self) -> AsyncSmartboxSession:
         """Return the smartbox session."""
         return self._session
 
-    async def update_device_away_status(self, away: bool):
+    async def update_device_away_status(self, away: bool) -> None:
         """Update device away status."""
         await self._device.set_away_status(away)
 
-    async def async_update(self, _) -> StatusDict:
+    async def async_update(self, _: Any) -> StatusDict:  # noqa: ANN401
         """Update status."""
         return self.status
 
@@ -298,15 +329,16 @@ class SmartboxNode:
     def window_mode(self) -> bool:
         """Is windows mode enable."""
         if "window_mode_enabled" not in self._setup:
-            raise KeyError(
-                "window_mode_enabled not present in setup for node {self.name}"
-            )
+            msg = "window_mode_enabled not present in setup for node {self.name}"
+            raise KeyError(msg)
         return self._setup["window_mode_enabled"]
 
     async def set_window_mode(self, window_mode: bool) -> bool:
         """Set window mode."""
         await self._session.set_node_setup(
-            self._device.dev_id, self._node_info, {"window_mode_enabled": window_mode}
+            self._device.dev_id,
+            self._node_info,
+            {"window_mode_enabled": window_mode},
         )
         self._setup["window_mode_enabled"] = window_mode
         return window_mode
@@ -315,15 +347,16 @@ class SmartboxNode:
     def true_radiant(self) -> bool:
         """Is a true radiant."""
         if "true_radiant_enabled" not in self._setup:
-            raise KeyError(
-                "true_radiant_enabled not present in setup for node {self.name}"
-            )
+            msg = "true_radiant_enabled not present in setup for node {self.name}"
+            raise KeyError(msg)
         return self._setup["true_radiant_enabled"]
 
-    async def set_true_radiant(self, true_radiant: bool):
+    async def set_true_radiant(self, true_radiant: bool) -> None:
         """Set true radiant."""
         await self._session.set_node_setup(
-            self._device.dev_id, self._node_info, {"true_radiant_enabled": true_radiant}
+            self._device.dev_id,
+            self._node_info,
+            {"true_radiant_enabled": true_radiant},
         )
         self._setup["true_radiant_enabled"] = true_radiant
 
@@ -335,17 +368,25 @@ class SmartboxNode:
             else status["active"]
         )
 
+    async def update_power(self) -> None:
+        """Update power."""
+        self._status["power"] = await self._session.get_device_power_limit(
+            self.device.dev_id,
+            self._node_info,
+        )
+
     async def update_samples(self) -> None:
         """Update the samples."""
+        max_sample = 2
         sample = await self.get_samples(
             int(time.time() - (3600 * 3)),
             int(time.time()),
         )
-        if len(sample) >= 2:
+        if len(sample) >= max_sample:
             self._samples = sample[-2:]
             _LOGGER.debug("Updating node %s samples: %s", self.name, self._samples)
 
-    async def get_samples(self, start_time, end_time) -> SamplesDict:
+    async def get_samples(self, start_time: int, end_time: int) -> SamplesDict:
         """Update the samples."""
         return await self._session.get_node_samples(
             self.device.dev_id,
@@ -374,7 +415,7 @@ def is_supported_node(node: SmartboxNode | MagicMock) -> bool:
     return is_heater_node(node)
 
 
-def get_temperature_unit(status) -> None | Any:
+def get_temperature_unit(status: StatusDict) -> None | UnitOfTemperature:
     """Get the unit of temperature."""
     if "units" not in status:
         return None
@@ -383,7 +424,8 @@ def get_temperature_unit(status) -> None | Any:
         return UnitOfTemperature.CELSIUS
     if unit == "F":
         return UnitOfTemperature.FAHRENHEIT
-    raise ValueError(f"Unknown temp unit {unit}")
+    msg = f"Unknown temp unit {unit}"
+    raise ValueError(msg)
 
 
 async def get_devices(
@@ -391,7 +433,7 @@ async def get_devices(
 ) -> list[SmartboxDevice]:
     """Get the devices."""
     homes: list[dict[str, Any]] = await session.get_homes()
-    devices: list[SmartboxDevice] = list()
+    devices: list[SmartboxDevice] = []
     for home in homes:
         _home = home.copy()
         del _home["devs"]
@@ -407,18 +449,18 @@ async def create_smartbox_device(
     hass: HomeAssistant,
 ) -> SmartboxDevice | MagicMock:
     """Create factory function for smartboxdevices."""
-
     _device = SmartboxDevice(device, session, hass)
     await _device.initialise_nodes()
     return _device
 
 
-def _check_status_key(key: str, node_type: str, status: dict[str, Any]):
+def _check_status_key(key: str, node_type: str, status: dict[str, Any]) -> None:
     if key not in status:
-        raise KeyError(
+        msg = (
             f"'{key}' not found in {node_type} - please report to {GITHUB_ISSUES_URL}. "
             f"status: {status}"
         )
+        raise KeyError(msg)
 
 
 def get_target_temperature(node_type: str, status: dict[str, Any]) -> float:
@@ -435,11 +477,14 @@ def get_target_temperature(node_type: str, status: dict[str, Any]) -> float:
         if status["selected_temp"] == "ice":
             _check_status_key("ice_temp", node_type, status)
             return float(status["ice_temp"])
-        raise KeyError(
+        if status["selected_temp"] == "off":
+            return float(0)
+        msg = (
             f"'Unexpected 'selected_temp' value {status['selected_temp']}"
             f" found for {node_type} - please report to"
             f" {GITHUB_ISSUES_URL}. status: {status}"
         )
+        raise KeyError(msg)
     _check_status_key("stemp", node_type, status)
     return float(status["stemp"])
 
@@ -456,15 +501,15 @@ def set_temperature_args(
             _check_status_key("eco_offset", node_type, status)
             target_temp = temp + float(status["eco_offset"])
         elif status["selected_temp"] == "ice":
-            raise ValueError(
-                "Can't set temperature for htr_mod devices when ice mode is selected"
-            )
+            msg = "Can't set temperature for htr_mod devices when ice mode is selected"
+            raise ValueError(msg)
         else:
-            raise KeyError(
+            msg = (
                 f"'Unexpected 'selected_temp' value {status['selected_temp']}"
                 f" found for {node_type} - please report to "
                 f"{GITHUB_ISSUES_URL}. status: {status}"
             )
+            raise KeyError(msg)
         return {
             "on": True,
             "mode": status["mode"],
@@ -482,10 +527,8 @@ def set_temperature_args(
 def get_hvac_mode(node_type: str, status: dict[str, Any]) -> HVACMode | None:
     """Get the mode of HVAC."""
     _check_status_key("mode", node_type, status)
-    if (
-        status["mode"] == "off"
-        or node_type == SmartboxNodeType.HTR_MOD
-        and not status["on"]
+    if status["mode"] == "off" or (
+        node_type == SmartboxNodeType.HTR_MOD and not status["on"]
     ):
         return HVACMode.OFF
     if status["mode"] == "manual":
@@ -498,14 +541,16 @@ def get_hvac_mode(node_type: str, status: dict[str, Any]) -> HVACMode | None:
         return HVACMode.AUTO
     if status["mode"] == "self_learn" or status["mode"] == "presence":
         return HVACMode.AUTO
-    _LOGGER.error("Unknown smartbox node mode %s", status["mode"])
-    raise ValueError(f"Unknown smartbox node mode {status['mode']}")
+    msg = "Unknown smartbox node mode %s", status["mode"]
+    _LOGGER.error(msg)
+    raise ValueError(msg)
 
 
 def set_hvac_mode_args(
     node_type: str, status: dict[str, Any], hvac_mode: str
 ) -> dict[str, Any]:
     """Set the mode of HVAC."""
+    error_msg = f"Unsupported hvac mode {hvac_mode}"
     if node_type == SmartboxNodeType.HTR_MOD:
         if hvac_mode == HVACMode.OFF:
             return {"on": False}
@@ -520,14 +565,14 @@ def set_hvac_mode_args(
             return hvac_mode_args
         if hvac_mode == HVACMode.AUTO:
             return {"on": True, "mode": "auto"}
-        raise ValueError(f"Unsupported hvac mode {hvac_mode}")
+        raise ValueError(error_msg)
     if hvac_mode == HVACMode.OFF:
         return {"mode": "off"}
     if hvac_mode == HVACMode.HEAT:
         return {"mode": "manual"}
     if hvac_mode == HVACMode.AUTO:
         return {"mode": "auto"}
-    raise ValueError(f"Unsupported hvac mode {hvac_mode}")
+    raise ValueError(error_msg)
 
 
 def _get_htr_mod_preset_mode(node_type: str, mode: str, selected_temp: str) -> str:
@@ -538,17 +583,19 @@ def _get_htr_mod_preset_mode(node_type: str, mode: str, selected_temp: str) -> s
             return PRESET_ECO
         if selected_temp == "ice":
             return PRESET_FROST
-        raise ValueError(
+        msg = (
             f"'Unexpected 'selected_temp' value {'selected_temp'} found for "
-            f"{node_type} - please report to {GITHUB_ISSUES_URL}."
+            f"{node_type} and {mode} - please report to {GITHUB_ISSUES_URL}."
         )
+        raise ValueError(msg)
     if mode == "auto":
         return PRESET_SCHEDULE
     if mode == "presence":
         return PRESET_ACTIVITY
     if mode == "self_learn":
         return PRESET_SELF_LEARN
-    raise ValueError(f"Unknown smartbox node mode {mode}")
+    msg = f"Unknown smartbox node mode {mode}"
+    raise ValueError(msg)
 
 
 def set_preset_mode_status_update(
@@ -556,9 +603,10 @@ def set_preset_mode_status_update(
 ) -> dict[str, Any]:
     """Set preset mode status update."""
     if node_type != SmartboxNodeType.HTR_MOD:
-        raise ValueError(f"{node_type} nodes do not support preset {preset_mode}")
+        msg = f"{node_type} nodes do not support preset {preset_mode}"
+        raise ValueError(msg)
     # PRESET_HOME and PRESET_AWAY are not handled via status updates
-    assert preset_mode not in (PRESET_HOME, PRESET_AWAY)
+    assert preset_mode not in (PRESET_HOME, PRESET_AWAY, PRESET_NONE)  # noqa: S101
 
     if preset_mode == PRESET_SCHEDULE:
         return set_hvac_mode_args(node_type, status, HVACMode.AUTO)
@@ -572,7 +620,8 @@ def set_preset_mode_status_update(
         return {"on": True, "mode": "manual", "selected_temp": "eco"}
     if preset_mode == PRESET_FROST:
         return {"on": True, "mode": "manual", "selected_temp": "ice"}
-    raise ValueError(f"Unsupported preset {preset_mode} for node type {node_type}")
+    msg = f"Unsupported preset {preset_mode} for node type {node_type}"
+    raise ValueError(msg)
 
 
 def get_factory_options(node: SmartboxNode | MagicMock) -> FactoryOptionsDict:
