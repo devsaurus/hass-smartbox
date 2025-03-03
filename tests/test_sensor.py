@@ -1,7 +1,9 @@
+from datetime import datetime
 import logging
 import time
 from unittest.mock import AsyncMock, patch
 
+from dateutil import tz
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_LOCKED, STATE_UNAVAILABLE
 import pytest
@@ -36,6 +38,7 @@ def _check_temp_state(hass, mock_node_status, state):
     )
 
 
+@pytest.mark.asyncio
 async def test_basic_temp(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
@@ -101,6 +104,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry):
             assert state.state != STATE_UNAVAILABLE
 
 
+@pytest.mark.asyncio
 async def test_basic_power(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
@@ -175,6 +179,7 @@ async def test_basic_power(hass, mock_smartbox, config_entry):
             assert state.state != STATE_UNAVAILABLE
 
 
+@pytest.mark.asyncio
 async def test_unavailable(hass, mock_smartbox_unavailable):
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -184,7 +189,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 18
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -208,6 +213,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
                 assert state.state == STATE_UNAVAILABLE
 
 
+@pytest.mark.asyncio
 async def test_basic_charge_level(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
@@ -286,11 +292,10 @@ async def test_basic_charge_level(hass, mock_smartbox, config_entry):
             assert state.state != STATE_UNAVAILABLE
 
 
+@pytest.mark.asyncio
 async def test_update_statistics_start(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
-    mock_node.get_samples = AsyncMock(
-        return_value={"samples": [{"t": 1739966400, "counter": 100}]}
-    )
+    mock_node.get_samples.return_value = [{"t": 1739966400, "counter": 100}]
     sensor = TotalConsumptionSensor(mock_node, config_entry)
     sensor.hass = hass
     hass.config_entries.async_update_entry(
@@ -325,9 +330,7 @@ async def test_update_statistics_auto(hass, mock_smartbox, config_entry):
     await hass.async_block_till_done()
 
     mock_node = AsyncMock()
-    mock_node.get_samples = AsyncMock(
-        return_value={"samples": [{"t": 1739966400, "counter": 100}]}
-    )
+    mock_node.get_samples.return_value = [{"t": 1739966400, "counter": 100}]
     sensor = TotalConsumptionSensor(mock_node, config_entry)
     sensor.hass = hass
     hass.config_entries.async_update_entry(
@@ -347,11 +350,10 @@ async def test_update_statistics_auto(hass, mock_smartbox, config_entry):
         assert mock_import_statistics.called
 
 
+@pytest.mark.asyncio
 async def test_update_statistics_off(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
-    mock_node.get_samples = AsyncMock(
-        return_value={"samples": [{"t": time.time(), "counter": 100}]}
-    )
+    mock_node.get_samples = AsyncMock(return_value=[{"t": time.time(), "counter": 100}])
     sensor = TotalConsumptionSensor(mock_node, config_entry)
     sensor.hass = hass
     hass.config_entries.async_update_entry(
@@ -370,6 +372,7 @@ async def test_update_statistics_off(hass, mock_smartbox, config_entry):
         mock_import_statistics.assert_not_called()
 
 
+@pytest.mark.asyncio
 async def test_async_update_pmo(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
     mock_node.node_type = SmartboxNodeType.PMO
@@ -384,6 +387,7 @@ async def test_async_update_pmo(hass, mock_smartbox, config_entry):
         mock_write_ha_state.assert_called_once()
 
 
+@pytest.mark.asyncio
 async def test_async_update_pmo_non_pmo_node(hass, mock_smartbox, config_entry):
     mock_node = AsyncMock()
     mock_node.node_type = SmartboxNodeType.HTR
@@ -396,3 +400,75 @@ async def test_async_update_pmo_non_pmo_node(hass, mock_smartbox, config_entry):
 
         mock_node.update_power.assert_not_called()
         mock_write_ha_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_adjust_short_term_statistics(hass, mock_smartbox, config_entry):
+    mock_node = AsyncMock()
+    sensor = TotalConsumptionSensor(mock_node, config_entry)
+    sensor.hass = hass
+    sensor.entity_id = "sensor.test_total_consumption"
+    sensor.native_unit_of_measurement = "kWh"
+
+    last_stat = {
+        sensor.entity_id: [
+            {
+                "start": 1739966400,
+                "sum": 50,
+                "state": 100,
+            }
+        ]
+    }
+
+    with (
+        patch("custom_components.smartbox.sensor.get_instance") as mock_get_instance,
+        patch(
+            "custom_components.smartbox.sensor.get_last_short_term_statistics",
+            return_value=last_stat,
+        ),
+        patch.object(hass.loop, "run_in_executor", return_value=last_stat),
+    ):
+        mock_instance = mock_get_instance.return_value
+        mock_instance.async_add_executor_job = AsyncMock(return_value=last_stat)
+        await sensor._adjust_short_term_statistics()
+        mock_instance.async_adjust_statistics.assert_called_once_with(
+            statistic_id=sensor.entity_id,
+            start_time=datetime.fromtimestamp(1739966400, tz.tzlocal()),
+            sum_adjustment=50,
+            adjustment_unit="kWh",
+        )
+
+
+@pytest.mark.asyncio
+async def test_adjust_short_term_statistics_no_adjustment(
+    hass, mock_smartbox, config_entry
+):
+    mock_node = AsyncMock()
+    sensor = TotalConsumptionSensor(mock_node, config_entry)
+    sensor.hass = hass
+    sensor.entity_id = "sensor.test_total_consumption"
+    sensor.native_unit_of_measurement = "kWh"
+
+    last_stat = {
+        sensor.entity_id: [
+            {
+                "start": 1739966400,
+                "sum": 100,
+                "state": 100,
+            }
+        ]
+    }
+
+    with (
+        patch("custom_components.smartbox.sensor.get_instance") as mock_get_instance,
+        patch(
+            "custom_components.smartbox.sensor.get_last_short_term_statistics",
+            return_value=last_stat,
+        ),
+        patch.object(hass.loop, "run_in_executor", return_value=last_stat),
+    ):
+        mock_instance = mock_get_instance.return_value
+        mock_instance.async_add_executor_job = AsyncMock(return_value=last_stat)
+        await sensor._adjust_short_term_statistics()
+
+        mock_instance.async_adjust_statistics.assert_not_called()

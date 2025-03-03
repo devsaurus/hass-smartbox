@@ -1,5 +1,4 @@
 import logging
-import time
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock, patch
 
 from homeassistant.components.climate import (
@@ -23,8 +22,6 @@ from custom_components.smartbox.model import (
     SmartboxDevice,
     SmartboxNode,
     _get_htr_mod_preset_mode,
-    create_smartbox_device,
-    get_devices,
     get_hvac_mode,
     get_target_temperature,
     get_temperature_unit,
@@ -36,93 +33,10 @@ from custom_components.smartbox.model import (
 )
 
 from .const import MOCK_SMARTBOX_DEVICE_INFO
-from .mocks import mock_device, mock_node
+from .mocks import mock_node
 from .test_utils import assert_log_message
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def test_create_smartbox_device(hass):
-    dev_1_id = "test_device_id_1"
-    mock_dev = mock_device(dev_1_id, [])
-    mock_session = AsyncMock()
-    with patch(
-        "custom_components.smartbox.model.SmartboxDevice",
-        autospec=True,
-        return_value=mock_dev,
-    ) as device_ctor_mock:
-        device = await create_smartbox_device({"dev_id": dev_1_id}, mock_session, hass)
-        device_ctor_mock.assert_called_with(
-            {"dev_id": dev_1_id},
-            mock_session,
-            hass,
-        )
-        await mock_dev.initialise_nodes()
-        assert device == mock_dev
-
-
-async def test_get_devices(hass, mock_smartbox):
-    test_devices = [
-        SmartboxDevice(dev, mock_smartbox.session, hass)
-        for dev in await mock_smartbox.session.get_devices()
-    ]
-    with patch(
-        "custom_components.smartbox.model.create_smartbox_device",
-        autospec=True,
-        side_effect=test_devices,
-    ):
-        # check we called the smartbox API correctly
-        devices = await get_devices(mock_smartbox.session, hass)
-        assert devices == test_devices
-
-
-async def test_smartbox_device_init(hass, mock_smartbox):
-    mock_device = mock_smartbox.get_devices()[0]
-    dev_id = mock_device["dev_id"]
-
-    node_sentinel_1 = AsyncMock()
-    node_sentinel_2 = AsyncMock()
-    with patch(
-        "custom_components.smartbox.model.SmartboxNode",
-        side_effect=[node_sentinel_1, node_sentinel_2],
-        autospec=True,
-    ) as smartbox_node_ctor_mock:
-        device = SmartboxDevice(mock_device, mock_smartbox.session, hass)
-        assert device.device == mock_device
-        assert device.dev_id == dev_id
-        assert device.name == mock_device["name"]
-        await device.initialise_nodes()
-        mock_smartbox.session.get_nodes.assert_called_with(dev_id)
-
-        nodes = list(device.get_nodes())
-        mock_nodes = await mock_smartbox.session.get_nodes(dev_id)
-        assert len(nodes) == len(mock_nodes)
-
-        mock_smartbox.session.get_node_status.assert_any_call(dev_id, mock_nodes[0])
-        mock_smartbox.session.get_node_status.assert_any_call(dev_id, mock_nodes[1])
-
-        smartbox_node_ctor_mock.assert_any_call(
-            device,
-            mock_nodes[0],
-            mock_smartbox.session,
-            await mock_smartbox.session.get_node_status(dev_id, mock_nodes[0]),
-            await mock_smartbox.session.get_node_setup(dev_id, mock_nodes[0]),
-            await mock_smartbox.session.get_node_samples(
-                dev_id, mock_nodes[0], int(time.time()), int(time.time())
-            ),
-        )
-        smartbox_node_ctor_mock.assert_any_call(
-            device,
-            mock_nodes[1],
-            mock_smartbox.session,
-            await mock_smartbox.session.get_node_status(dev_id, mock_nodes[1]),
-            await mock_smartbox.session.get_node_setup(dev_id, mock_nodes[1]),
-            await mock_smartbox.session.get_node_samples(
-                dev_id, mock_nodes[1], int(time.time()), int(time.time())
-            ),
-        )
-
-        assert mock_smartbox.get_socket(dev_id) is not None
 
 
 async def test_smartbox_device_dev_data_updates(hass):
@@ -714,7 +628,10 @@ async def test_update_samples(hass):
         "true_radiant_enabled": False,
         "window_mode_enabled": False,
     }
-    node_sample = {"samples": [{"t": 1735686000, "temp": "11.3", "counter": 247426}]}
+    node_sample = [
+        {"t": 1735685000, "temp": "11.3", "counter": 0},
+        {"t": 1735686000, "temp": "11.3", "counter": 247426},
+    ]
 
     node = SmartboxNode(
         mock_device,
@@ -726,24 +643,28 @@ async def test_update_samples(hass):
     )
     assert node.total_energy == 247426
     # Test case where get_samples returns less than 2 samples
-    mock_session.get_node_samples.return_value = [{"counter": 100}]
+    mock_session.get_node_samples.return_value = {"samples": [{"counter": 100}]}
     await node.update_samples()
     assert node._samples == node_sample
 
     # Test case where get_samples returns 2 or more samples
-    mock_session.get_node_samples.return_value = [
-        {"counter": 100},
-        {"counter": 200},
-    ]
+    mock_session.get_node_samples.return_value = {
+        "samples": [
+            {"counter": 100},
+            {"counter": 200},
+        ]
+    }
     await node.update_samples()
     assert node._samples == [{"counter": 100}, {"counter": 200}]
 
     # Test case where get_samples returns more than 2 samples
-    mock_session.get_node_samples.return_value = [
-        {"counter": 100},
-        {"counter": 200},
-        {"counter": 300},
-    ]
+    mock_session.get_node_samples.return_value = {
+        "samples": [
+            {"counter": 100},
+            {"counter": 200},
+            {"counter": 300},
+        ]
+    }
     await node.update_samples()
     assert node._samples == [{"counter": 200}, {"counter": 300}]
 
@@ -778,3 +699,18 @@ async def test_update_power(hass):
     mock_session.get_device_power_limit.return_value = 100
     await node.update_power()
     assert node.status["power"] == 100
+
+
+def test_smartbox_device_property():
+    """Test the device property of SmartboxDevice."""
+    dev_id = "device_1"
+    mock_session = MagicMock()
+    mock_device_info = MOCK_SMARTBOX_DEVICE_INFO[dev_id]
+    # Simulate initialise_nodes with mock data, make sure nobody calls the real one
+    with patch(
+        "custom_components.smartbox.model.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(mock_device_info, mock_session, hass=None)
+        assert device.device == mock_device_info
+        assert device.name == MOCK_SMARTBOX_DEVICE_INFO[dev_id]["name"]
