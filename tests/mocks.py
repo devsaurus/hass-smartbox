@@ -11,7 +11,7 @@ from homeassistant.helpers import entity_registry
 from smartbox.resailer import SmartboxResailer
 
 from custom_components.smartbox.const import DOMAIN, HEATER_NODE_TYPES, SmartboxNodeType
-from custom_components.smartbox.types import SetupDict, StatusDict
+from custom_components.smartbox.models import SetupDict, StatusDict
 from tests.const import CONF_DEVICE_IDS
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +69,18 @@ def get_away_status_switch_entity_name(mock_device: dict[str, Any]) -> str:
     return f"{mock_device['name']} Away Status"
 
 
+def get_boost_switch_entity_name(mock_device: dict[str, Any]) -> str:
+    return f"{mock_device['name']} Boost"
+
+
+def get_boost_temperature_entity_name(mock_device: dict[str, Any]) -> str:
+    return f"{mock_device['name']} Boost temperature"
+
+
+def get_boost_duration_entity_name(mock_device: dict[str, Any]) -> str:
+    return f"{mock_device['name']} Boost duration"
+
+
 def get_window_mode_switch_entity_name(mock_node: dict[str, Any]) -> str:
     return f"{mock_node['name']} Window Mode"
 
@@ -102,6 +114,21 @@ def get_sensor_entity_id(mock_node: dict[str, Any], sensor_type: str) -> str:
 def get_away_status_switch_entity_id(mock_device: dict[str, Any]) -> str:
     object_id = get_object_id(get_away_status_switch_entity_name(mock_device))
     return get_entity_id_from_object_id(object_id, SWITCH_DOMAIN)
+
+
+def get_boost_switch_entity_id(mock_device: dict[str, Any]) -> str:
+    object_id = get_object_id(get_boost_switch_entity_name(mock_device))
+    return get_entity_id_from_object_id(object_id, SWITCH_DOMAIN)
+
+
+def get_boost_duration_entity_id(mock_device: dict[str, Any]) -> str:
+    object_id = get_object_id(get_boost_duration_entity_name(mock_device))
+    return get_entity_id_from_object_id(object_id, NUMBER_DOMAIN)
+
+
+def get_boost_temperature_entity_id(mock_device: dict[str, Any]) -> str:
+    object_id = get_object_id(get_boost_temperature_entity_name(mock_device))
+    return get_entity_id_from_object_id(object_id, NUMBER_DOMAIN)
 
 
 def get_window_mode_switch_entity_id(mock_node: dict[str, Any]) -> str:
@@ -216,6 +243,13 @@ class MockSmartbox:
 
         mock_session.get_node_setup = get_node_setup
         mock_session.get_setup = get_node_setup
+
+        async def set_node_setup(dev_id, node, setup_updates):
+            self._session_node_setup[dev_id][node["addr"]].update(setup_updates)
+            self._session_node_setup = self._socket_node_setup
+
+        mock_session.set_setup = set_node_setup
+        mock_session.set_node_setup = set_node_setup
 
         async def get_device_power_limit(dev_id, node=None):
             if node is not None:
@@ -366,7 +400,9 @@ class MockSmartbox:
 
 def active_or_charging_update(node_type: str, active: bool) -> StatusDict:
     return (
-        {"charging": active} if node_type == SmartboxNodeType.ACM else {"active": active}
+        {"charging": active}
+        if node_type == SmartboxNodeType.ACM
+        else {"active": active}
     )
 
 

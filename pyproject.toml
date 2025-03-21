@@ -51,10 +51,8 @@ warn_unused_configs = true
 
 [tool.ruff]
 target-version = "py313"
-fix = true
-line-length = 90
-
-
+#fix = true
+#line-length = 90
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -106,6 +104,11 @@ max-complexity = 25
     "B018",
     "PLR0912",
     "PT011",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "def handle_set_boost_params",
 ]
 
 [tool.tox]

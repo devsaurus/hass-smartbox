@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import SmartboxConfigEntry
 from .entity import SmartBoxNodeEntity
-from .model import true_radiant_available, window_mode_available
+from .models import true_radiant_available, window_mode_available
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +36,13 @@ async def async_setup_entry(
             _LOGGER.info("True radiant not available for node %s", node.name)
         _LOGGER.debug("Creating away switch for node %s", node.name)
         switch_entities.append(AwaySwitch(node, entry))
+
+        if node.boost_available:
+            _LOGGER.debug("Creating boost switch for node %s", node.name)
+            boost_switch = BoostSwitch(node, entry)
+            switch_entities.append(boost_switch)
+        else:
+            _LOGGER.info("Boost mode not available for node %s", node.name)
 
     async_add_entities(switch_entities, update_before_add=True)
 
@@ -104,3 +111,47 @@ class TrueRadiantSwitch(SmartBoxNodeEntity, SwitchEntity):
     def is_on(self) -> bool:
         """Return true if the switch is on."""
         return self._node.true_radiant
+
+
+class BoostSwitch(SmartBoxNodeEntity, SwitchEntity):
+    """Smartbox boost switch that activates the device's native boost mode.
+
+    The SmartBox heaters have a built-in boost function that temporarily increases
+    the temperature for a configurable amount of time. This switch provides a simple
+    toggle to activate/deactivate this functionality.
+
+    The boost temperature and duration can be configured through:
+    1. The device's setup through extra_options
+    2. The smartbox.set_boost_params service
+    """
+
+    _attr_key = "boost"
+    _attr_websocket_event = "status"
+    _attr_icon = "mdi:rocket-launch"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the state attributes."""
+        return {
+            "boost_temperature": self._node.boost_temp,
+            "boost_duration_minutes": self._node.boost_time,
+            "boost_time_remaining": self._node.remaining_boost_time,
+            "boost_end_hour": f"{self._node.boost_end_min / 60:.0f}:{self._node.boost_end_min % 60:02d}"
+            if self._node.remaining_boost_time
+            else None,
+        }
+
+    async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
+        """Turn on boost mode."""
+        _LOGGER.debug("Activating boost mode for %s", self._node.name)
+        await self._node.set_status(boost=True)
+
+    async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
+        """Turn off boost mode."""
+        _LOGGER.debug("Deactivating boost mode for %s", self._node.name)
+        await self._node.set_status(boost=False)
+
+    @property
+    def is_on(self) -> bool:
+        """Return if boost mode is active."""
+        return self._node.boost

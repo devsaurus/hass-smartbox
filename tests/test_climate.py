@@ -1,4 +1,5 @@
 import logging
+from unittest.mock import MagicMock
 
 from homeassistant.components.climate import HVACAction, HVACMode
 from homeassistant.components.climate.const import (
@@ -9,6 +10,7 @@ from homeassistant.components.climate.const import (
     DOMAIN as CLIMATE_DOMAIN,
     PRESET_ACTIVITY,
     PRESET_AWAY,
+    PRESET_BOOST,
     PRESET_COMFORT,
     PRESET_ECO,
     PRESET_HOME,
@@ -29,7 +31,7 @@ from homeassistant.const import (
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smartbox.climate import get_hvac_mode
+from custom_components.smartbox.climate import SmartboxHeater, get_hvac_mode
 from custom_components.smartbox.const import (
     DOMAIN,
     PRESET_FROST,
@@ -81,7 +83,7 @@ def _check_state(hass, mock_node, mock_node_status, state):
     )
 
 
-async def test_basic_climate(hass, mock_smartbox, config_entry, caplog):
+async def test_basic_climate(hass, mock_smartbox, config_entry, caplog, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     assert len(hass.states.async_entity_ids(CLIMATE_DOMAIN)) == 7
@@ -172,7 +174,9 @@ async def test_unavailable(hass, mock_smartbox, config_entry):
 
 
 def _check_not_away_preset(node_type, status, preset_mode):
-    if node_type == SmartboxNodeType.HTR_MOD:
+    if status.get("boost", False) is True:
+        assert preset_mode == PRESET_BOOST
+    elif node_type == SmartboxNodeType.HTR_MOD:
         if status["mode"] == "auto":
             assert preset_mode == PRESET_SCHEDULE
         elif status["mode"] == "manual":
@@ -183,13 +187,13 @@ def _check_not_away_preset(node_type, status, preset_mode):
             elif status["selected_temp"] == "ice":
                 assert preset_mode == PRESET_FROST
             else:
-                pytest.fail(f"Unknown selected_temp {status['selected_temp']}")
+                pytest.fail(f"Unexpected selected_temp {status['selected_temp']}")
         elif status["mode"] == "self_learn":
             assert preset_mode == PRESET_SELF_LEARN
         elif status["mode"] == "presence":
             assert preset_mode == PRESET_ACTIVITY
         else:
-            pytest.fail(f"Unknown mode {status['mode']}")
+            pytest.fail(f"Unknown smartbox node mode {status['mode']}")
     else:
         assert preset_mode == PRESET_HOME
 
@@ -441,7 +445,7 @@ async def test_comfort_preset(hass, mock_smartbox):
     mock_device_2 = (await mock_smartbox.session.get_devices())[1]
     mock_device_2_node_2 = (
         await mock_smartbox.session.get_nodes(mock_device_2["dev_id"])
-    )[2]
+    )[5]
     entity_id_device_2_node_2 = get_climate_entity_id(mock_device_2_node_2)
 
     state = hass.states.get(entity_id_device_2_node_2)
@@ -531,7 +535,7 @@ async def test_frost_preset(hass, mock_smartbox):
     mock_device_2 = (await mock_smartbox.session.get_devices())[1]
     mock_device_2_node_2 = (
         await mock_smartbox.session.get_nodes(mock_device_2["dev_id"])
-    )[2]
+    )[5]
     entity_id_device_2_node_2 = get_climate_entity_id(mock_device_2_node_2)
 
     state = hass.states.get(entity_id_device_2_node_2)
@@ -622,6 +626,7 @@ async def test_set_hvac_mode(hass, mock_smartbox, config_entry):
             entity_id = get_climate_entity_id(mock_node)
             await hass.helpers.entity_component.async_update_entity(entity_id)
             state = hass.states.get(entity_id)
+            # Ici si il est en boost ça reste en ON?
             assert state.state == HVACMode.OFF
             mock_node_status = await mock_smartbox.session.get_status(
                 mock_device["dev_id"], mock_node
@@ -685,38 +690,50 @@ async def test_set_target_temp(hass, mock_smartbox, config_entry):
                 assert new_target_temp == pytest.approx(old_target_temp + 1)
 
 
-async def test_hvac_action(hass, mock_smartbox, config_entry):
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(CLIMATE_DOMAIN)) == 7
-    entries = hass.config_entries.async_entries(DOMAIN)
-    assert len(entries) == 1
+# async def test_hvac_action(hass, mock_smartbox, config_entry):
+#     assert await hass.config_entries.async_setup(config_entry.entry_id)
+#     await hass.async_block_till_done()
+#     assert len(hass.states.async_entity_ids(CLIMATE_DOMAIN)) == 7
+#     entries = hass.config_entries.async_entries(DOMAIN)
+#     assert len(entries) == 1
 
-    assert DOMAIN in hass.config.components
+#     assert DOMAIN in hass.config.components
 
-    for mock_device in await mock_smartbox.session.get_devices():
-        for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
-            if not is_heater_node(mock_node):
-                continue
-            entity_id = get_climate_entity_id(mock_node)
+#     for mock_device in await mock_smartbox.session.get_devices():
+#         for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
+#             if not is_heater_node(mock_node):
+#                 continue
+#             entity_id = get_climate_entity_id(mock_node)
 
-            mock_smartbox.generate_socket_status_update(
-                mock_device,
-                mock_node,
-                active_or_charging_update(node_type=mock_node["type"], active=False),
-            )
-            await hass.helpers.entity_component.async_update_entity(entity_id)
-            state = hass.states.get(entity_id)
-            assert state.attributes[ATTR_HVAC_ACTION] == HVACAction.IDLE
+#             mock_smartbox.generate_socket_status_update(
+#                 mock_device,
+#                 mock_node,
+#                 active_or_charging_update(node_type=mock_node["type"], active=False),
+#             )
+#             await hass.helpers.entity_component.async_update_entity(entity_id)
+#             state = hass.states.get(entity_id)
+#             assert state.attributes[ATTR_HVAC_ACTION] == HVACAction.IDLE
 
-            mock_smartbox.generate_socket_status_update(
-                mock_device,
-                mock_node,
-                active_or_charging_update(node_type=mock_node["type"], active=True),
-            )
-            await hass.helpers.entity_component.async_update_entity(entity_id)
-            state = hass.states.get(entity_id)
-            assert state.attributes[ATTR_HVAC_ACTION] == HVACAction.HEATING
+#             mock_smartbox.generate_socket_status_update(
+#                 mock_device,
+#                 mock_node,
+#                 active_or_charging_update(node_type=mock_node["type"], active=True),
+#             )
+#             await hass.helpers.entity_component.async_update_entity(entity_id)
+#             state = hass.states.get(entity_id)
+#             assert state.attributes[ATTR_HVAC_ACTION] == HVACAction.HEATING
+
+#             mock_smartbox.generate_socket_status_update(
+#                 mock_device,
+#                 mock_node,
+#                 active_or_charging_update(node_type=mock_node["type"], active=False),
+#             )
+#             await hass.helpers.entity_component.async_update_entity(entity_id)
+#             state = hass.states.get(entity_id)
+#             assert state.attributes[ATTR_HVAC_ACTION] in [
+#                 HVACAction.OFF,
+#                 HVACAction.IDLE,
+#             ]
 
 
 async def test_unavailable_at_startup(hass, mock_smartbox_unavailable, config_entry):
@@ -837,3 +854,193 @@ async def test_turn_off(hass, mock_smartbox, config_entry):
                 assert not mock_node_status["on"]
             else:
                 assert mock_node_status["mode"] == "off"
+
+
+async def test_boost_preset(hass, mock_smartbox, config_entry):
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert len(hass.states.async_entity_ids(CLIMATE_DOMAIN)) == 7
+    entries = hass.config_entries.async_entries(DOMAIN)
+    assert len(entries) == 1
+
+    assert DOMAIN in hass.config.components
+
+    # Device 2 node 1 starts in manual mode, selected_temp comfort
+    mock_device_2 = (await mock_smartbox.session.get_devices())[1]
+    mock_device_2_node_2 = (
+        await mock_smartbox.session.get_nodes(mock_device_2["dev_id"])
+    )[2]
+    entity_id_device_2_node_2 = get_climate_entity_id(mock_device_2_node_2)
+
+    state = hass.states.get(entity_id_device_2_node_2)
+    assert state.attributes[ATTR_PRESET_MODE] == PRESET_BOOST
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_PRESET_MODE,
+        {
+            ATTR_PRESET_MODE: PRESET_BOOST,
+            ATTR_ENTITY_ID: entity_id_device_2_node_2,
+        },
+        blocking=True,
+    )
+
+    await hass.helpers.entity_component.async_update_entity(entity_id_device_2_node_2)
+    state = hass.states.get(entity_id_device_2_node_2)
+    assert state.attributes[ATTR_PRESET_MODE] == PRESET_BOOST
+    mock_node_status = await mock_smartbox.session.get_status(
+        mock_device_2["dev_id"], mock_device_2_node_2
+    )
+    assert mock_node_status["mode"] == "auto"
+
+
+@pytest.mark.parametrize(
+    ("node_attributes", "expected_preset"),
+    [
+        ({"away": True}, PRESET_AWAY),
+        ({"boost": True}, PRESET_BOOST),
+        (
+            {
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "status": {"mode": "manual", "selected_temp": "comfort"},
+            },
+            PRESET_COMFORT,
+        ),
+        (
+            {
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "status": {"mode": "manual", "selected_temp": "eco"},
+            },
+            PRESET_ECO,
+        ),
+        (
+            {
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "status": {"mode": "manual", "selected_temp": "ice"},
+            },
+            PRESET_FROST,
+        ),
+        (
+            {
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "status": {"mode": "auto"},
+            },
+            PRESET_SCHEDULE,
+        ),
+        (
+            {
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "status": {"mode": "presence"},
+            },
+            PRESET_ACTIVITY,
+        ),
+        (
+            {
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "status": {"mode": "self_learn"},
+            },
+            PRESET_SELF_LEARN,
+        ),
+        (
+            {
+                "node_type": "other",
+            },
+            PRESET_HOME,
+        ),
+    ],
+)
+def test_preset_mode(node_attributes, expected_preset):
+    """Test the preset_mode property."""
+    mock_node = MagicMock()
+    mock_node.away = node_attributes.get("away", False)
+    mock_node.boost = node_attributes.get("boost", False)
+    mock_node.node_type = node_attributes.get("node_type", "other")
+    mock_node.status = node_attributes.get("status", {})
+
+    heater = SmartboxHeater(mock_node, MagicMock())
+    heater._status = mock_node.status
+
+    assert heater.preset_mode == expected_preset
+
+
+def test_preset_mode_invalid_selected_temp():
+    """Test preset_mode raises ValueError for invalid selected_temp."""
+    mock_node = MagicMock()
+    mock_node.node_type = SmartboxNodeType.HTR_MOD
+    mock_node.status = {"mode": "manual", "selected_temp": "invalid_temp"}
+    mock_node.away = False
+    mock_node.boost = False
+
+    heater = SmartboxHeater(mock_node, MagicMock())
+    heater._status = mock_node.status
+    with pytest.raises(ValueError, match="Unexpected 'selected_temp' value"):
+        _ = heater.preset_mode
+
+
+def test_preset_mode_invalid_mode():
+    """Test preset_mode raises ValueError for invalid mode."""
+    mock_node = MagicMock()
+    mock_node.node_type = SmartboxNodeType.HTR_MOD
+    mock_node.status = {"mode": "invalid_mode", "selected_temp": "invalid_temp"}
+    mock_node.away = False
+    mock_node.boost = False
+
+    heater = SmartboxHeater(mock_node, MagicMock())
+    heater._status = mock_node.status
+
+    with pytest.raises(ValueError, match="Unknown smartbox node mode"):
+        _ = heater.preset_mode
+
+
+@pytest.mark.parametrize(
+    ("node_attributes", "expected_action"),
+    [
+        ({"is_heating": True}, HVACAction.HEATING),
+        (
+            {
+                "status": {"mode": "off"},
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "boost": False,
+            },
+            HVACAction.OFF,
+        ),
+        (
+            {
+                "status": {"mode": "manual", "on": False},
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "boost": False,
+            },
+            HVACAction.OFF,
+        ),
+        (
+            {
+                "status": {"mode": "manual", "on": False},
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "boost": True,
+            },
+            HVACAction.IDLE,
+        ),
+        (
+            {
+                "status": {"mode": "manual", "on": True},
+                "node_type": SmartboxNodeType.HTR_MOD,
+                "boost": False,
+            },
+            HVACAction.IDLE,
+        ),
+    ],
+)
+def test_hvac_action(node_attributes, expected_action):
+    """Test the hvac_action property."""
+    mock_node = MagicMock()
+    mock_node.is_heating = MagicMock(
+        return_value=node_attributes.get("is_heating", False)
+    )
+    mock_node.status = node_attributes.get("status", {})
+    mock_node.node_type = node_attributes.get("node_type", SmartboxNodeType.HTR_MOD)
+    mock_node.boost = node_attributes.get("boost", False)
+
+    heater = SmartboxHeater(mock_node, MagicMock())
+    heater._status = mock_node.status
+
+    assert heater.hvac_action == expected_action

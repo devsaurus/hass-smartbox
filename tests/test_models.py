@@ -1,6 +1,8 @@
+from datetime import datetime, timedelta
 import logging
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock, patch
 
+from dateutil import tz
 from homeassistant.components.climate import (
     PRESET_ACTIVITY,
     PRESET_AWAY,
@@ -18,22 +20,18 @@ from custom_components.smartbox.const import (
     PRESET_SELF_LEARN,
     SmartboxNodeType,
 )
-from custom_components.smartbox.model import (
+from custom_components.smartbox.models import (
     SmartboxDevice,
     SmartboxNode,
-    _get_htr_mod_preset_mode,
     get_hvac_mode,
     get_target_temperature,
     get_temperature_unit,
-    is_heater_node,
-    is_supported_node,
     set_hvac_mode_args,
     set_preset_mode_status_update,
     set_temperature_args,
 )
 
 from .const import MOCK_SMARTBOX_DEVICE_INFO
-from .mocks import mock_node
 from .test_utils import assert_log_message
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,7 +45,7 @@ async def test_smartbox_device_dev_data_updates(hass):
     mock_node_2 = MagicMock()
     # Simulate initialise_nodes with mock data, make sure nobody calls the real one
     with patch(
-        "custom_components.smartbox.model.SmartboxDevice.initialise_nodes",
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
         new_callable=NonCallableMock,
     ):
         device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
@@ -76,7 +74,7 @@ async def test_smartbox_device_connected_updates(hass):
     mock_node_2 = MagicMock()
     # Simulate initialise_nodes with mock data, make sure nobody calls the real one
     with patch(
-        "custom_components.smartbox.model.SmartboxDevice.initialise_nodes",
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
         new_callable=NonCallableMock,
     ):
         device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
@@ -101,7 +99,7 @@ async def test_smartbox_device_node_status_update(hass, caplog):
     mock_node_3 = MagicMock()
     # Simulate initialise_nodes with mock data, make sure nobody calls the real one
     with patch(
-        "custom_components.smartbox.model.SmartboxDevice.initialise_nodes",
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
         new_callable=NonCallableMock,
     ):
         device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
@@ -137,7 +135,7 @@ async def test_smartbox_device_node_status_update(hass, caplog):
         mock_node_2.update_status.assert_not_called()
         assert_log_message(
             caplog,
-            "custom_components.smartbox.model",
+            "custom_components.smartbox.models",
             logging.ERROR,
             "Received status update for unknown node htr 3",
         )
@@ -151,7 +149,7 @@ async def test_smartbox_device_node_setup_update(hass, caplog):
     mock_node_2 = MagicMock()
     # Simulate initialise_nodes with mock data, make sure nobody calls the real one
     with patch(
-        "custom_components.smartbox.model.SmartboxDevice.initialise_nodes",
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
         new_callable=NonCallableMock,
     ):
         device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
@@ -179,7 +177,7 @@ async def test_smartbox_device_node_setup_update(hass, caplog):
         mock_node_2.update_setup.assert_not_called()
         assert_log_message(
             caplog,
-            "custom_components.smartbox.model",
+            "custom_components.smartbox.models",
             logging.ERROR,
             "Received setup update for unknown node htr 3",
         )
@@ -246,24 +244,6 @@ async def test_smartbox_node(hass):
     node.update_setup({})
     with pytest.raises(KeyError):
         node.true_radiant
-
-
-def test_is_heater_node():
-    dev_id = "device_1"
-    addr = 1
-    assert is_heater_node(mock_node(dev_id, addr, SmartboxNodeType.HTR))
-    assert is_heater_node(mock_node(dev_id, addr, SmartboxNodeType.HTR_MOD))
-    assert is_heater_node(mock_node(dev_id, addr, SmartboxNodeType.ACM))
-    assert not is_heater_node(mock_node(dev_id, addr, "sldkfjsd"))
-
-
-def test_is_supported_node():
-    dev_id = "device_1"
-    addr = 1
-    assert is_supported_node(mock_node(dev_id, addr, SmartboxNodeType.HTR))
-    assert is_supported_node(mock_node(dev_id, addr, SmartboxNodeType.HTR_MOD))
-    assert is_supported_node(mock_node(dev_id, addr, SmartboxNodeType.ACM))
-    assert not is_supported_node(mock_node(dev_id, addr, "oijijr"))
 
 
 def test_get_target_temperature():
@@ -439,7 +419,9 @@ def test_set_temperature_args():
 def test_get_hvac_mode():
     assert get_hvac_mode(SmartboxNodeType.HTR, {"mode": "off"}) == HVACMode.OFF
     assert get_hvac_mode(SmartboxNodeType.ACM, {"mode": "auto"}) == HVACMode.AUTO
-    assert get_hvac_mode(SmartboxNodeType.HTR, {"mode": "modified_auto"}) == HVACMode.AUTO
+    assert (
+        get_hvac_mode(SmartboxNodeType.HTR, {"mode": "modified_auto"}) == HVACMode.AUTO
+    )
     assert get_hvac_mode(SmartboxNodeType.ACM, {"mode": "manual"}) == HVACMode.HEAT
     with pytest.raises(ValueError):
         get_hvac_mode(SmartboxNodeType.HTR, {"mode": "blah"})
@@ -484,7 +466,9 @@ def test_get_hvac_mode():
 
 def test_set_hvac_mode_args():
     assert set_hvac_mode_args(SmartboxNodeType.HTR, {}, HVACMode.OFF) == {"mode": "off"}
-    assert set_hvac_mode_args(SmartboxNodeType.ACM, {}, HVACMode.AUTO) == {"mode": "auto"}
+    assert set_hvac_mode_args(SmartboxNodeType.ACM, {}, HVACMode.AUTO) == {
+        "mode": "auto"
+    }
     assert set_hvac_mode_args(SmartboxNodeType.HTR, {}, HVACMode.HEAT) == {
         "mode": "manual"
     }
@@ -549,7 +533,9 @@ def test_set_preset_mode_status_update():
         "mode": "manual",
         "selected_temp": "eco",
     }
-    assert set_preset_mode_status_update(SmartboxNodeType.HTR_MOD, {}, PRESET_FROST) == {
+    assert set_preset_mode_status_update(
+        SmartboxNodeType.HTR_MOD, {}, PRESET_FROST
+    ) == {
         "on": True,
         "mode": "manual",
         "selected_temp": "ice",
@@ -575,42 +561,6 @@ def test_get_temperature_unit():
     with pytest.raises(ValueError) as exc_info:
         get_temperature_unit({"units": "K"})
     assert "Unknown temp unit K" in exc_info.exconly()
-
-
-def test_get_htr_mod_preset_mode():
-    assert (
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "manual", "comfort")
-        == PRESET_COMFORT
-    )
-    assert (
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "manual", "eco") == PRESET_ECO
-    )
-    assert (
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "manual", "ice")
-        == PRESET_FROST
-    )
-    assert (
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "auto", "") == PRESET_SCHEDULE
-    )
-    assert (
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "presence", "")
-        == PRESET_ACTIVITY
-    )
-    assert (
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "self_learn", "")
-        == PRESET_SELF_LEARN
-    )
-
-    with pytest.raises(ValueError) as exc_info:
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "manual", "unknown")
-    assert (
-        "Unexpected 'selected_temp' value selected_temp found for htr_mod"
-        in exc_info.exconly()
-    )
-
-    with pytest.raises(ValueError) as exc_info:
-        _get_htr_mod_preset_mode(SmartboxNodeType.HTR_MOD, "unknown_mode", "")
-    assert "Unknown smartbox node mode unknown_mode" in exc_info.exconly()
 
 
 async def test_update_samples(hass):
@@ -708,9 +658,60 @@ def test_smartbox_device_property():
     mock_device_info = MOCK_SMARTBOX_DEVICE_INFO[dev_id]
     # Simulate initialise_nodes with mock data, make sure nobody calls the real one
     with patch(
-        "custom_components.smartbox.model.SmartboxDevice.initialise_nodes",
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
         new_callable=NonCallableMock,
     ):
         device = SmartboxDevice(mock_device_info, mock_session, hass=None)
         assert device.device == mock_device_info
         assert device.name == MOCK_SMARTBOX_DEVICE_INFO[dev_id]["name"]
+
+
+async def test_remaining_boost_time(hass):
+    dev_id = "test_device_id_1"
+    mock_device = AsyncMock()
+    mock_device.dev_id = dev_id
+    mock_device.away = False
+    node_addr = 3
+    node_type = SmartboxNodeType.HTR
+    node_name = "Bathroom Heater"
+    node_info = {"addr": node_addr, "name": node_name, "type": node_type}
+    mock_session = AsyncMock()
+    initial_status = {
+        "mtemp": "21.4",
+        "stemp": "22.5",
+        "boost": True,
+        "boost_end_min": 90,
+    }
+    initial_setup = {
+        "true_radiant_enabled": False,
+        "window_mode_enabled": False,
+    }
+    node_sample = {"samples": [{"t": 1735686000, "temp": "11.3", "counter": 247426}]}
+
+    node = SmartboxNode(
+        mock_device,
+        node_info,
+        mock_session,
+        initial_status,
+        initial_setup,
+        node_sample,
+    )
+
+    assert node.boost_end_min == 90
+    # Test case when boost is not active
+    node._status["boost"] = False
+    assert node.remaining_boost_time == 0
+
+    # Test case when boost is active
+    node._status["boost"] = True
+    node._status["boost_end_min"] = 90  # 1 hour 30 minutes from midnight
+    today = datetime.now(tz.tzutc()) + timedelta(hours=1)
+    boost_end_datetime = today.replace(hour=1, minute=30).astimezone(tz.tzlocal())
+    expected_remaining_time = (boost_end_datetime - today).total_seconds()
+    assert node.remaining_boost_time == expected_remaining_time
+
+    # Test case when boost end time is in the past
+    node._status["boost_end_min"] = 30  # 30 minutes from midnight
+    boost_end_datetime = today.replace(hour=0, minute=30).astimezone(tz.tzlocal())
+    expected_remaining_time = (boost_end_datetime - today).total_seconds()
+    assert node.remaining_boost_time == expected_remaining_time

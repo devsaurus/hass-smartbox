@@ -15,7 +15,11 @@ from custom_components.smartbox.const import (
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
-from custom_components.smartbox.sensor import PowerSensor, TotalConsumptionSensor
+from custom_components.smartbox.sensor import (
+    BoostEndTimeSensor,
+    PowerSensor,
+    TotalConsumptionSensor,
+)
 
 from .mocks import (
     active_or_charging_update,
@@ -39,10 +43,10 @@ def _check_temp_state(hass, mock_node_status, state):
 
 
 @pytest.mark.asyncio
-async def test_basic_temp(hass, mock_smartbox, config_entry):
+async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -64,7 +68,8 @@ async def test_basic_temp(hass, mock_smartbox, config_entry):
             )
             assert state.name == f"{mock_node['name']} Temperature"
             assert (
-                state.attributes[ATTR_FRIENDLY_NAME] == f"{mock_node['name']} Temperature"
+                state.attributes[ATTR_FRIENDLY_NAME]
+                == f"{mock_node['name']} Temperature"
             )
             unique_id = get_node_unique_id(mock_device, mock_node, "temperature")
             assert entity_id == get_entity_id_from_unique_id(
@@ -105,10 +110,10 @@ async def test_basic_temp(hass, mock_smartbox, config_entry):
 
 
 @pytest.mark.asyncio
-async def test_basic_power(hass, mock_smartbox, config_entry):
+async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -180,7 +185,7 @@ async def test_basic_power(hass, mock_smartbox, config_entry):
 
 
 @pytest.mark.asyncio
-async def test_unavailable(hass, mock_smartbox_unavailable):
+async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="test_username_1",
@@ -189,7 +194,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 18
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 23
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -214,10 +219,10 @@ async def test_unavailable(hass, mock_smartbox_unavailable):
 
 
 @pytest.mark.asyncio
-async def test_basic_charge_level(hass, mock_smartbox, config_entry):
+async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 25
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -472,3 +477,27 @@ async def test_adjust_short_term_statistics_no_adjustment(
         await sensor._adjust_short_term_statistics()
 
         mock_instance.async_adjust_statistics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_value_boost_end_time_sensor(hass, mock_smartbox, config_entry):
+    mock_node = AsyncMock()
+    mock_node.boost = True
+    mock_node.boost_end_min = 90  # 1 hour and 30 minutes
+    sensor = BoostEndTimeSensor(mock_node, config_entry)
+    sensor.hass = hass
+
+    with patch("custom_components.smartbox.sensor.dt.now") as mock_now:
+        mock_now.return_value = datetime(2023, 10, 10, 0, 0, 0, tzinfo=tz.tzlocal())
+        expected_time = datetime(2023, 10, 10, 1, 30, tzinfo=tz.tzlocal())
+        assert sensor.native_value == expected_time
+
+        # Test boost end time is in the past, should return next day
+        mock_node.boost_end_min = 30  # 30 minutes
+        mock_now.return_value = datetime(2023, 10, 10, 1, 0, 0, tzinfo=tz.tzlocal())
+        expected_time = datetime(2023, 10, 11, 0, 30, tzinfo=tz.tzlocal())
+        assert sensor.native_value == expected_time
+
+        # Test no boost
+        mock_node.boost = False
+        assert sensor.native_value is None
