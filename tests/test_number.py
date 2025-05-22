@@ -1,6 +1,7 @@
 from homeassistant.components.number import ATTR_VALUE, DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.number.const import SERVICE_SET_VALUE
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME
+from homeassistant.helpers.entity_component import async_update_entity
 
 from custom_components.smartbox.const import DOMAIN
 
@@ -53,7 +54,7 @@ async def test_power_limit(hass, mock_smartbox, config_entry):
     mock_device_2 = (await mock_smartbox.session.get_devices())[1]
     mock_node_2 = (await mock_smartbox.session.get_nodes(mock_device_2["dev_id"]))[0]
     entity_id = get_power_limit_number_entity_id(mock_node_2)
-    await hass.helpers.entity_component.async_update_entity(entity_id)
+    await async_update_entity(hass, entity_id)
     state = hass.states.get(entity_id)
     assert state.state == "1000"
 
@@ -64,7 +65,7 @@ async def test_power_limit(hass, mock_smartbox, config_entry):
         {ATTR_ENTITY_ID: entity_id, ATTR_VALUE: 500},
         blocking=True,
     )
-    await hass.helpers.entity_component.async_update_entity(entity_id)
+    await async_update_entity(hass, entity_id)
     state = hass.states.get(entity_id)
     assert state.state == "500"
 
@@ -99,7 +100,7 @@ async def test_boost_temperature(hass, mock_smartbox, config_entry):
         blocking=True,
     )
     # Faut simuler le retour de la websocket
-    await hass.helpers.entity_component.async_update_entity(entity_id)
+    await async_update_entity(hass, entity_id)
     state = hass.states.get(entity_id)
     assert state.state == "25.0"
 
@@ -132,6 +133,6 @@ async def test_boost_duration(hass, mock_smartbox, config_entry):
         blocking=True,
     )
     # Faut simuler le retour de la websocket
-    await hass.helpers.entity_component.async_update_entity(entity_id)
+    await async_update_entity(hass, entity_id)
     state = hass.states.get(entity_id)
     assert state.state == "120.0"
