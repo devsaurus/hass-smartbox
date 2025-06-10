@@ -69,7 +69,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_API_NAME): SelectSelector(
             SelectSelectorConfig(
                 options=[
-                    SelectOptionDict(value=reseller.api_url, label=reseller.name)
+                    SelectOptionDict(value=reseller.name, label=reseller.name)
                     for reseller in AvailableResellers.resellers.values()
                 ],
                 mode=SelectSelectorMode.DROPDOWN,
@@ -106,11 +106,11 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 placeholders["error"] = str(ex)
             else:
                 await self.async_set_unique_id(
-                    f"{AvailableResellers(api_url=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
+                    f"{AvailableResellers(name=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
                 )
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title=f"{AvailableResellers(api_url=user_input[CONF_API_NAME]).name} {user_input[CONF_USERNAME]}",
+                    title=f"{AvailableResellers(name=user_input[CONF_API_NAME]).name} {user_input[CONF_USERNAME]}",
                     data=user_input,
                 )
         context = dict(self.context)
@@ -150,7 +150,7 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 placeholders["error"] = str(ex)
             else:
                 await self.async_set_unique_id(
-                    f"{AvailableResellers(api_url=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
+                    f"{AvailableResellers(name=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
                 )
                 self._abort_if_unique_id_mismatch(reason="invalid_auth")
                 return self.async_update_reload_and_abort(
